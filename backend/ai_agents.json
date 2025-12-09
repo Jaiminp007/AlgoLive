@@ -1,0 +1,24 @@
+{
+    "Google": [
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-flash"
+    ],
+    "DeepSeek": [
+        "deepseek/deepseek-chat-v3.1",
+        "deepseek/deepseek-r1-0528-qwen3-8b",
+        "deepseek/deepseek-r1-distill-llama-70b"
+    ],
+    "NVidia": [
+        "nvidia/nemotron-nano-9b-v2:free"
+    ],
+    "Amazon": [
+        "amazon/nova-2-lite-v1:free"
+    ],
+    "TNG": [
+        "tngtech/tng-r1t-chimera:free",
+        "tngtech/deepseek-r1t2-chimera:free"
+    ],
+    "Alibaba": [
+        "alibaba/tongyi-deepresearch-30b-a3b:free"
+    ]
+}

@@ -1,0 +1,91 @@
+import { ResponsiveContainer, LineChart, XAxis, YAxis, Tooltip, CartesianGrid, Line, ReferenceLine, Legend } from 'recharts';
+
+const LiveChart = ({ data, agents }) => {
+    // Generate distinct colors for agents (Neon/Bright for Dark Mode)
+    const colors = ['#00ff9d', '#ff3fac', '#00bcd4', '#ff9800', '#d500f9', '#2962ff'];
+
+    // Debug log to ensure data is flowing
+    // console.log("LiveChart Data:", data.length, "Agents:", agents.map(a => a.name));
+
+    return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>AGENT EQUITY COMPARISON</h3>
+            <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} />
+
+                        {/* X Axis */}
+                        <XAxis
+                            dataKey="time"
+                            type="number"
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={(unix) => new Date(unix * 1000).toLocaleTimeString()}
+                            stroke="#5c5f80"
+                            fontSize={10}
+                            tick={{ fill: '#a0a5cc' }}
+                        />
+
+                        {/* Left Axis: Agent Equity (Highlight) */}
+                        <YAxis
+                            yAxisId="left"
+                            orientation="left"
+                            domain={[
+                                (dataMin) => Math.abs(dataMin - 100) > 50 ? 90 : dataMin - 0.1, // Smart clamp for $100 range
+                                'auto'
+                            ]}
+                            stroke="#a0a5cc"
+                            width={60}
+                            fontSize={10}
+                            tick={{ fill: '#fff' }}
+                            tickFormatter={(val) => `$${val.toLocaleString()}`}
+                        />
+
+                        <Tooltip
+                            contentStyle={{
+                                backgroundColor: 'rgba(20, 22, 46, 0.95)',
+                                borderColor: '#2a2d50',
+                                color: '#fff',
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                            }}
+                            itemStyle={{ fontSize: '12px' }}
+                            labelStyle={{ color: '#a0a5cc' }}
+                            labelFormatter={(label) => new Date(label * 1000).toLocaleTimeString()}
+                        />
+
+                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+
+                        {/* Baseline at 100 */}
+                        <ReferenceLine y={100} yAxisId="left" stroke="#5c5f80" strokeDasharray="3 3" label={{ value: 'START ($100)', position: 'insideTopLeft', fill: '#5c5f80', fontSize: 10 }} />
+
+                        {/* Agent Lines */}
+                        {agents.map((agent, index) => {
+                            // Ensure we have a valid color
+                            const color = colors[index % colors.length];
+                            // Debug: Log what we are trying to render
+                            // console.log(`Rendering Line for ${agent.name} with color ${color}`);
+
+                            return (
+                                <Line
+                                    key={agent.name}
+                                    yAxisId="left"
+                                    type="linear"
+                                    dataKey={agent.name}
+                                    stroke={color}
+                                    strokeWidth={3}
+                                    dot={false}
+                                    activeDot={{ r: 6 }}
+                                    name={agent.name}
+                                    isAnimationActive={false}
+                                    connectNulls={true}
+                                />
+                            );
+                        })}
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+};
+
+export default LiveChart;
