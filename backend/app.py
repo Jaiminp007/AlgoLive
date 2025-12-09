@@ -178,8 +178,7 @@ def reset_arena():
     return jsonify({'status': 'arena_reset'})
 
 if __name__ == '__main__':
-    print("Starting AlgoClash Live Backend...")
-    # socketio.run(app, debug=True, port=5000)
-    # allow_unsafe_werkzeug=True is needed for some environments if using standard flask run, 
-    # but socketio.run is usually fine.
-    socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)
+    port = int(os.getenv('PORT', 5000))
+    print(f"Starting AlgoClash Live Backend on port {port}...")
+    socketio.run(app, debug=False, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+

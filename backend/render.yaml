@@ -2,12 +2,17 @@ services:
   - type: web
     name: algoclash-backend
     runtime: python
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
+    startCommand: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:10000 app:app
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: PORT
+        value: "10000"
       - key: MONGO_URI
         sync: false
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: RENDER_EXTERNAL_URL
         sync: false
