@@ -355,6 +355,7 @@ class Arena:
         last_analyst_log = 0
         
         while self.running:
+          try:
             tickers = getattr(self, 'latest_tick', None)
             if not tickers:
                 time.sleep(0.1)
@@ -753,6 +754,11 @@ class Arena:
 
             tick_counter += 1
             time.sleep(1)
+          except Exception as e:
+            print(f"[LOOP ERROR] {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)  # Wait before retrying
 
     def _execute_order(self, name, data, decision, symbol, quantity, tickers):
         if decision == "HOLD" or not symbol or quantity <= 0: return False, 0.0
