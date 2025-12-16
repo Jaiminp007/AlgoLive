@@ -5,6 +5,10 @@ Uses caching to avoid rate limits.
 """
 import os
 import time
+import warnings
+
+# Suppress pytrends FutureWarning about fillna
+warnings.filterwarnings('ignore', category=FutureWarning, module='pytrends')
 
 # Optional import - graceful fallback if not installed
 try:
