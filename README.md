@@ -98,3 +98,4 @@ npm run dev
 
 ### 3. Command Center
 Open `http://localhost:5173` to watch the battle live.
+# Deploy trigger Tue Dec 16 14:27:21 EST 2025
