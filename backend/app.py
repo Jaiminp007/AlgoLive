@@ -1,10 +1,9 @@
-import eventlet
-eventlet.monkey_patch()
 from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from pymongo import MongoClient
 import os
+import json
 import threading
 import time
 import requests as http_requests
@@ -16,7 +15,7 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Keep-alive ping for Render free tier
 def keep_alive():
@@ -41,7 +40,7 @@ keep_alive_thread.start()
 @socketio.on('request_history')
 def handle_request_history():
     print(f"Client requested history. Sending {len(arena.chart_history)} points.")
-    socketio.emit('chart_history_response', arena.chart_history)
+    socketio.emit('chart_history_response', list(arena.chart_history))
 
 # Database Connection
 mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/algoclash')
@@ -53,8 +52,12 @@ except Exception as e:
     print(f"Failed to connect to MongoDB: {e}")
     db = None
 
-from brain import Brain
-from arena import Arena
+# Add root directory to sys.path to allow sibling imports
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from analyst_engine.brain import Brain
+from market_simulation.arena import Arena
 
 # ... (Previous imports kept) ...
 
@@ -64,51 +67,34 @@ arena = Arena(socketio, db) # Pass db if needed or None
 brain = Brain()
 
 # Auto-Deploy Default Agents
-default_agents = [
-    "Tongyi_DeepResearch_30b",
-    "GPT_OSS_20B",
-    "Gemini_2_5_Flash_Lite",
-    # Custom Pre-Built Agents (Not AI-generated)
-    "Conservative_Captain",   # EMA Trend Follower (Golden/Death Cross)
-    "Aggressive_Scalper",     # RSI Mean Reversion (Oversold/Overbought)
-    "Volatility_Hunter"       # Bollinger Bands Breakout Trader
-]
+# Auto-Deploy Default Agents - DEPRECATED (Moved to Frontend Selection)
+default_agents = []
 
-# AUTO-GENERATE AGENTS ON STARTUP
-print("--- 🧠 INITIALIZING AI AGENT GENERATION ---")
+# AUTO-GENERATE AGENTS ON STARTUP - DEPRECATED
+# Logic moved to client-side "Start Market" flow
 
-# Specific model mapping requested by user
-AGENT_MODELS = {
-    "Tongyi_DeepResearch_30b": "tngtech/tng-r1t-chimera:free",
-    "GPT_OSS_20B": "openai/gpt-oss-20b:free",
-    "Gemini_2_5_Flash_Lite": "google/gemini-2.5-flash-lite"
-}
-
-for agent_name in default_agents:
-    # Check if agent file already exists
-    agent_path = os.path.join("agents", f"{agent_name}.py")
-    if os.path.exists(agent_path):
-        print(f"Skipping generation for {agent_name} (File exists)")
-        continue
-
-    # Use specific model if defined, otherwise fallback to Gemini Flash
-    target_model = AGENT_MODELS.get(agent_name, "google/gemini-2.5-flash-preview-09-2025")
-    
-    print(f"Generating strategy for {agent_name} using {target_model}...")
+@app.route('/available_models', methods=['GET'])
+def get_available_models():
     try:
-        gen_result = brain.generate_agent_code(agent_name, model=target_model)
-        if "error" in gen_result:
-            print(f"FAILED to generate {agent_name}: {gen_result['error']}")
-        else:
-            print(f"SUCCESS: Generated {agent_name} with {target_model}")
+        # Use absolute path relative to this file
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Go up one level to root, then into analyst_engine
+        json_path = os.path.join(os.path.dirname(base_dir), 'analyst_engine', 'ai_agents.json')
+        print(f"DEBUG: Loading models from: {json_path}")
+        print(f"DEBUG: File exists: {os.path.exists(json_path)}")
+        
+        with open(json_path, 'r') as f:
+            models = json.load(f)
+        print(f"DEBUG: Loaded {len(models)} provider groups")
+        return jsonify(models)
     except Exception as e:
-        print(f"CRITICAL ERROR generating {agent_name}: {e}")
+        import traceback
+        print(f"Error reading ai_agents.json: {e}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
-print("--- 🤖 DEPLOYING GENERATED AGENTS ---")
-for agent_name in default_agents:
-    if arena.load_agent(agent_name):
-        print(f"Auto-deployed {agent_name}")
-arena.start_loop()
+# PREVIOUSLY: arena.start_loop() was here. Now we wait for explicit start.
+
 
 @app.route('/status', methods=['GET'])
 def get_status():
@@ -143,10 +129,10 @@ def deploy_agent():
     if not name:
         return jsonify({'error': 'Name required'}), 400
         
-    success = arena.load_agent(name)
+    success = arena.load_agent(name, reload_module=True)
     if success:
-        if not arena.running:
-            arena.start_loop()
+        # NOTE: Do NOT start arena here. Wait for explicit /start_arena call
+        # after ALL agents are generated and deployed.
         return jsonify({'status': 'deployed', 'name': name})
     else:
         return jsonify({'error': 'Failed to load agent'}), 400
@@ -176,6 +162,50 @@ def reset_arena():
     # Pass the global default agents list to the arena reset
     arena.reset(default_agents)
     return jsonify({'status': 'arena_reset'})
+
+@app.route('/soft_reset_arena', methods=['POST'])
+def soft_reset_arena():
+    print("SOFT RESET INITIATED")
+    arena.soft_reset()
+    return jsonify({'status': 'arena_soft_reset'})
+
+@app.route('/rebuild_algos', methods=['POST'])
+def rebuild_algos():
+    print("MANUAL REBUILD ALGOS INITIATED")
+    # Run in background to avoid timeout
+    t = threading.Thread(target=arena.force_evolution)
+    t.start()
+    return jsonify({'status': 'rebuild_initiated'})
+
+@app.route('/clear_all_data', methods=['POST'])
+def clear_all_data():
+    """Clears all MongoDB data: agents, chart_history, trades, and agent files"""
+    print("CLEARING ALL DATA...")
+    try:
+        # Stop arena if running
+        arena.stop_loop()
+        
+        # Clear MongoDB collections
+        db.agents.drop()
+        db.chart_history.drop()
+        db.trades.drop()
+        
+        # Clear in-memory state
+        arena.agents.clear()
+        arena.chart_history.clear()
+        
+        # Delete agent files
+        import glob
+        agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
+        for f in agent_files:
+            os.remove(f)
+            print(f"Deleted: {f}")
+        
+        print("ALL DATA CLEARED SUCCESSFULLY")
+        return jsonify({'status': 'all_data_cleared'})
+    except Exception as e:
+        print(f"Error clearing data: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))

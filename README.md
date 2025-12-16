@@ -1,102 +1,100 @@
 # AlgoClash Live ⚔️📈
 
-**AlgoClash Live** is a real-time, AI-powered trading arena where Large Language Models (LLMs) compete against each other to profit from live cryptocurrency markets.
+**AlgoClash Live** is a high-frequency, real-time trading arena where AI Agents (powered by LLMs) compete to profit from live cryptocurrency markets.
 
-Instead of backtesting on historical data, these agents run **LIVE** against the real Binance BTC/USDT stream, making split-second decisions to Buy, Sell, or Hold.
+Unlike traditional backtesting, these agents run **LIVE** against the real Binance stream (BTC, ETH, SOL, XRP, DOGE), making split-second decisions to Buy, Sell, or Hold based on real-time price action and technical indicators.
 
 ---
 
 ## 🏗️ Architecture
 
-The system is built as a modern full-stack application:
+The system is engineered for low-latency execution and modular AI integration:
 
-*   **Frontend**: React + Vite
-    *   **Visualization**: Real-time Recharts with linear interpolation for smooth tracking.
-    *   **Communication**: Socket.IO Client for millisecond-latency updates.
-    *   **UI**: Glassmorphism design with a "Command Center" aesthetic.
-*   **Backend**: Python Flask
-    *   **Engine**: Custom `Arena` class that runs the game loop.
-    *   **Concurrency**: Threaded loop independent of HTTP requests.
-    *   **Data Feed**: Direct integration with Binance Public API.
-    *   **AI Integration**: OpenRouter API for accessing diverse models.
-*   **Database**: MongoDB
-    *   **Persistence**: Saves agent equity, holdings, and state to survive restarts.
+### **Backend (Python Flask)**
+*   **Engine (`Arena`)**: A threaded game loop that pushes market ticks to agents and processes orders.
+*   **The Brain (`Brain`)**: An AI orchestration layer that uses **GitHub AI Inference** and **OpenRouter** to generate, validate, and *evolve* trading strategies on the fly.
+*   **Data Feed**: Direct WebSocket/REST integration with Binance for sub-second price updates.
+*   **Persistence**: MongoDB ensures agent equity, holdings, and trade history survive server restarts.
+
+### **Frontend (React + Vite)**
+*   **Real-Time Data**: Socket.IO for millisecond-latency price & portfolio updates.
+*   **Visualization**: High-performance Recharts with linear interpolation for smooth equity curves.
+*   **UX**: "Command Center" aesthetic with glassmorphism and responsive design.
 
 ---
 
 ## 🚀 Key Features
 
-### 1. Live Trading Arena
-*   **Real-Time Data**: Feeds live Bitcoin (BTC) price data to all agents simultaneously.
-*   **Paper Trading**: Simulates a wallet for each agent starting with **$100,000**.
-*   **Execution**: Logic handles slippage-free execution for the MVP (Buy at current tick price).
+### 1. Multi-Asset Live Trading
+Agents scan multiple assets simultaneously: **BTC, ETH, SOL, XRP, DOGE**.
+*   **Starting Capital**: $10,000 (Paper Money)
+*   **Leverage**: 4x Buying Power
+*   **Execution**: Simulated slip-free execution at current tick price.
 
-### 2. Multi-Model Competition
-We currently host a roster of top-tier Open Source and Proprietary models:
-*   **GPT-OSS 20B**: A balanced, general-purpose trader.
-*   **TNG-R1T Chimera**: specialized in reversal detection.
-*   **Nemotron-Nano 9B**: NVIDIA's efficient edge model.
-*   **Tongyi-DeepResearch 30B**: Alibaba's model focused on range trading.
-*   **GLM-4.5 Air**: Zhipu AI's volatility scalper.
+### 2. Elite Model Roster
+The arena currently hosts top-tier models via GitHub AI Inference:
+*   **GPT-4o** (OpenAI)
+*   **GPT-4** (OpenAI)
+*   **DeepSeek V3** (DeepSeek)
+*   **Mistral Large** (Mistral AI)
+*   **Grok 3** (xAI)
 
-### 3. "The Brain" (Agent Generation)
-*   The system can generate *new* unique trading strategies on the fly.
-*   It prompts an LLM to write valid Python code (`class Agent: def trade(self, tick): ...`).
-*   The code is validated using AST parsing for security before being hot-loaded into the Arena.
+### 3. "The Brain" & Auto-Evolution 🧬
+The system doesn't just run static code; it **invents** it.
+*   **Generation**: Prompts LLMs to write robust, functional Python trading algorithms (`execute_strategy`).
+*   **Validation**: AST parsing prevents dangerous imports (`os`, `sys`) ensuring sandbox safety.
+*   **Evolution**: An automated "Auditor" reviews agent performance (ROI). If an agent is losing money, the Auditor critiques the code and forces the LLM to refactor the strategy.
 
-### 4. Robust Visualization
-*   **Live Equity Chart**: Tracks performance relative to the $100k baseline.
-    *   *Feature*: Server-time based interpolation for smooth diagonal lines (no stair-stepping).
-    *   *Feature*: Smart Y-Axis clamping to ignore 0-value glitches.
-*   **Leaderboard**: Real-time ranking by ROI.
-*   **Trade Log**: A scrolling feed of every move made by the agents.
+### 4. Functional Agent Architecture
+Agents are pure Python functions with global state management, allowing them to:
+*   Calculate complex indicators (RSI, EMA, MACD).
+*   Maintain internal state (Entry Price, Trade Count) across ticks.
+*   Hot-Swap safely (logic handles zero-state restarts).
 
 ---
 
 ## 🛠️ How It Works (The Loop)
 
-1.  **Tick**: Backend fetches the latest price from Binance.
-2.  **Broadcast**: Price is sent to the Frontend immediately.
-3.  **Think**: The `Arena` loops through every active agent and calls their `.trade(tick)` method.
-4.  **Act**:
-    *   `BUY`: Converts 100% of Cash to Holdings.
-    *   `SELL`: Converts 100% of Holdings to Cash.
-    *   `HOLD`: Do nothing.
-5.  **Update**: New Equity is calculated (`Cash + (Holdings * Price)`).
-6.  **Persist**: State is saved to MongoDB (thread-safe).
-7.  **Repeat**: Happens every 3 seconds.
+1.  **Tick**: Backend fetches live prices for all 5 assets.
+2.  **Broadcast**: Prices sent to Frontend via WebSocket.
+3.  **Think**: `Arena` invokes the `execute_strategy` function of every active agent.
+4.  **Decide**: Agent returns `("BUY", "SOL", 10.5)` or `("SELL", "BTC", 0.1)`.
+5.  **Execute**: Arena validates funds, calculates fees (0.025%), and updates the portfolio.
+6.  **Evolve**: Periodically, underperforming agents are sent back to "The Brain" for code refinement.
 
 ---
 
-## 🎮 Controls
-
-*   **STOP TRADING**: Pauses the internal game loop.
-*   **HARD RESET ARENA**: The "Self-Destruct" button.
-    *   Stops the loop.
-    *   **Wipes the Database** (clears all history).
-    *   Reloads default agents.
-    *   Restarts the arena from $100k.
-
 ## 📦 Tech Stack
 
-- **Language**: Python 3.9+, JavaScript (ES6+)
-- **Frameworks**: Flask, React
-- **Libraries**:
-    - `pandas-ta`: Technical Analysis
-    - `pymongo`: Database Connector
-    - `socketio`: Real-time duplex communication
-    - `recharts`: Data visualization
+-   **Core**: Python 3.9+, Node.js
+-   **Web**: Flask, React, Vite, Socket.IO
+-   **AI**: Azure AI Inference (GitHub Models), OpenRouter API
+-   **Database**: MongoDB
+-   **Analysis**: `pandas`, `numpy`
+
+---
 
 ## 🏃‍♂️ Running the Project
 
-1.  **Start Backend**:
-    ```bash
-    cd backend
-    venv/bin/python3 app.py
-    ```
-2.  **Start Frontend**:
-    ```bash
-    cd frontend
-    npm run dev
-    ```
-3.  **Open**: `http://localhost:5173`
+### Prerequisites
+*   MongoDB installed and running locally.
+*   `GITHUB_TOKEN` and `OPENROUTER_API_KEY` in `.env`.
+
+### 1. Start Backend
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+### 2. Start Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 3. Command Center
+Open `http://localhost:5173` to watch the battle live.

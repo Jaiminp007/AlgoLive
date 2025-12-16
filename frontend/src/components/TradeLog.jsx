@@ -16,9 +16,16 @@ const TradeLog = ({ logs }) => {
                             </span>{' '}
                             <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{log.agent}</span>
                         </span>
-                        <span style={{ color: 'var(--text-secondary)' }}>
-                            @ ${log.price.toLocaleString()}
-                        </span>
+                        <div style={{ textAlign: 'right' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>
+                                @ ${log.price.toLocaleString()}
+                            </span>
+                            {log.fee > 0 && (
+                                <span style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#ffab00' }}>
+                                    (Fee: ${log.fee.toFixed(2)})
+                                </span>
+                            )}
+                        </div>
                     </div>
                     {log.reason && (
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontStyle: 'italic', paddingLeft: '8px', borderLeft: '2px solid var(--border-color)' }}>

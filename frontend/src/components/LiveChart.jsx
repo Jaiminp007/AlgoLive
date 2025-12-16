@@ -10,7 +10,10 @@ const LiveChart = ({ data, agents }) => {
     return (
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>AGENT EQUITY COMPARISON</h3>
-            <div style={{ flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, minHeight: '300px', position: 'relative' }}>
+                <div style={{ position: 'absolute', top: 5, right: 5, zIndex: 10, fontSize: '10px', color: '#aaa', background: 'rgba(0,0,0,0.5)', padding: '2px 5px' }}>
+                    DEBUG: Agents: {agents.length} | Data: {data.length}
+                </div>
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={data}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} />
@@ -30,10 +33,7 @@ const LiveChart = ({ data, agents }) => {
                         <YAxis
                             yAxisId="left"
                             orientation="left"
-                            domain={[
-                                (dataMin) => Math.abs(dataMin - 100) > 50 ? 90 : dataMin - 0.1, // Smart clamp for $100 range
-                                'auto'
-                            ]}
+                            domain={['auto', 'auto']}
                             stroke="#a0a5cc"
                             width={60}
                             fontSize={10}
@@ -55,8 +55,8 @@ const LiveChart = ({ data, agents }) => {
 
                         <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
 
-                        {/* Baseline at 100 */}
-                        <ReferenceLine y={100} yAxisId="left" stroke="#5c5f80" strokeDasharray="3 3" label={{ value: 'START ($100)', position: 'insideTopLeft', fill: '#5c5f80', fontSize: 10 }} />
+                        {/* Baseline at 10000 */}
+                        <ReferenceLine y={10000} yAxisId="left" stroke="#5c5f80" strokeDasharray="3 3" label={{ value: 'START ($10,000)', position: 'insideTopLeft', fill: '#5c5f80', fontSize: 10 }} />
 
                         {/* Agent Lines */}
                         {agents.map((agent, index) => {

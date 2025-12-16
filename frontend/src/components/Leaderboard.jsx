@@ -7,16 +7,15 @@ const Leaderboard = ({ agents }) => {
                     <thead>
                         <tr style={{ textAlign: 'left', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                             <th style={{ padding: '5px' }}>AGENT</th>
-                            <th style={{ padding: '5px', textAlign: 'right' }}>HOLDINGS (btc)</th>
                             <th style={{ padding: '5px', textAlign: 'right' }}>EQUITY</th>
                             <th style={{ padding: '5px', textAlign: 'right' }}>ROI</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {agents.map((agent) => (
+                        {agents && agents.map(agent => (
                             <tr key={agent.name} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                                <td style={{ padding: '8px 5px', fontWeight: 'bold' }}>{agent.name}</td>
-                                <td style={{ padding: '8px 5px', textAlign: 'right', fontFamily: 'monospace' }}>{agent.holdings ? agent.holdings.toFixed(4) : '0.000'}</td>
+                                <td style={{ padding: '8px 5px', fontWeight: 'bold', fontSize: '0.85rem' }}>{agent.name}</td>
+
                                 <td style={{ padding: '8px 5px', textAlign: 'right' }}>${agent.equity.toFixed(2)}</td>
                                 <td style={{ padding: '8px 5px', textAlign: 'right', color: agent.roi >= 0 ? '#00c853' : '#d50000', fontWeight: 'bold' }}>
                                     {agent.roi > 0 ? '+' : ''}{agent.roi.toFixed(2)}%

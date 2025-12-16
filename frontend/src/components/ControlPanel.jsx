@@ -9,28 +9,60 @@ const ControlPanel = () => {
         alert('Arena Stopped');
     };
 
+    const handleSoftReset = async () => {
+        if (!window.confirm("RESET ARENA?\n\nThis will reset equity to $10k and clear charts/trades, but KEEP all agents.")) return;
+        try {
+            await api.post('/soft_reset_arena');
+            // alert('Arena Reset Successfully');
+        } catch (e) {
+            alert('Reset Failed');
+        }
+    };
+
+    const handleRebuild = async () => {
+        if (!window.confirm("REBUILD ALGOS?\n\nThis will evaluate all agents and potentially Hot-Swap them with new code.")) return;
+        try {
+            await api.post('/rebuild_algos');
+            alert('Rebuild Initiated in Background');
+        } catch (e) {
+            alert('Rebuild Failed');
+        }
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>CONTROL PANEL</h3>
-
-            <div style={{ display: 'flex', gap: '10px' }}>
-                <button className="btn btn-danger" onClick={handleStop} style={{ flex: 1 }}>STOP TRADING</button>
+            <div style={{ padding: '10px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                System Automated
             </div>
 
-            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-color)' }}>
-                <button
-                    className="btn"
-                    style={{ width: '100%', background: 'rgba(213, 0, 0, 0.2)', border: '1px solid #d50000', color: '#ff8a80' }}
-                    onClick={async () => {
-                        if (confirm('HARD RESET: Clear all progress and restart?')) {
-                            await api.post('/reset_arena');
-                            window.location.reload();
-                        }
-                    }}
-                >
-                    ⚠️ HARD RESET ARENA
-                </button>
-            </div>
+            <button onClick={handleRebuild} style={{
+                background: 'rgba(0, 188, 212, 0.1)',
+                border: '1px solid var(--accent-blue)',
+                color: 'var(--accent-blue)',
+                padding: '8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '0.8rem',
+                transition: 'all 0.2s'
+            }}>
+                REBUILD ALGOS
+            </button>
+
+            <button onClick={handleSoftReset} style={{
+                background: 'rgba(255, 171, 0, 0.1)',
+                border: '1px solid var(--accent-orange)',
+                color: 'var(--accent-orange)',
+                padding: '8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '0.8rem',
+                transition: 'all 0.2s'
+            }}>
+                RESET ARENA
+            </button>
         </div>
     );
 };
