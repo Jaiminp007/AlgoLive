@@ -63,24 +63,32 @@ from market_simulation.arena import Arena
 arena = Arena(socketio, db)
 brain = Brain()
 
-# AUTO-DEPLOY EXISTING AGENTS ON STARTUP (Railway Mode)
-import glob
-agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
-print(f"Found {len(agent_files)} existing agents to auto-deploy...")
-for filepath in agent_files:
-    agent_name = os.path.basename(filepath).replace('.py', '')
-    if arena.load_agent(agent_name):
-        print(f"  ✅ Auto-deployed: {agent_name}")
+# DEFERRED STARTUP: Deploy agents and start arena AFTER server is ready
+def delayed_startup():
+    """Run heavy initialization in background to not block healthcheck"""
+    import time
+    time.sleep(5)  # Wait for Flask to be ready
+    
+    import glob
+    agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
+    print(f"Found {len(agent_files)} existing agents to auto-deploy...")
+    
+    for filepath in agent_files:
+        agent_name = os.path.basename(filepath).replace('.py', '')
+        if arena.load_agent(agent_name):
+            print(f"  ✅ Auto-deployed: {agent_name}")
+        else:
+            print(f"  ❌ Failed to load: {agent_name}")
+    
+    if len(arena.agents) > 0:
+        print(f"Starting arena with {len(arena.agents)} agents...")
+        arena.start_loop()
     else:
-        print(f"  ❌ Failed to load: {agent_name}")
+        print("No agents loaded - waiting for manual deployment.")
 
-# Start arena automatically if agents loaded
-if len(arena.agents) > 0:
-    print(f"Starting arena with {len(arena.agents)} agents...")
-    arena.start_loop()
-else:
-    print("No agents loaded - waiting for manual deployment.")
-
+# Start deferred initialization in background thread
+startup_thread = threading.Thread(target=delayed_startup, daemon=True)
+startup_thread.start()
 
 @app.route('/available_models', methods=['GET'])
 def get_available_models():
