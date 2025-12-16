@@ -59,19 +59,28 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analyst_engine.brain import Brain
 from market_simulation.arena import Arena
 
-# ... (Previous imports kept) ...
-
 # Global State
-# Global State
-arena = Arena(socketio, db) # Pass db if needed or None
+arena = Arena(socketio, db)
 brain = Brain()
 
-# Auto-Deploy Default Agents
-# Auto-Deploy Default Agents - DEPRECATED (Moved to Frontend Selection)
-default_agents = []
+# AUTO-DEPLOY EXISTING AGENTS ON STARTUP (Railway Mode)
+import glob
+agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
+print(f"Found {len(agent_files)} existing agents to auto-deploy...")
+for filepath in agent_files:
+    agent_name = os.path.basename(filepath).replace('.py', '')
+    if arena.load_agent(agent_name):
+        print(f"  ✅ Auto-deployed: {agent_name}")
+    else:
+        print(f"  ❌ Failed to load: {agent_name}")
 
-# AUTO-GENERATE AGENTS ON STARTUP - DEPRECATED
-# Logic moved to client-side "Start Market" flow
+# Start arena automatically if agents loaded
+if len(arena.agents) > 0:
+    print(f"Starting arena with {len(arena.agents)} agents...")
+    arena.start_loop()
+else:
+    print("No agents loaded - waiting for manual deployment.")
+
 
 @app.route('/available_models', methods=['GET'])
 def get_available_models():
