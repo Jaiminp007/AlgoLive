@@ -42,15 +42,21 @@ def handle_request_history():
     print(f"Client requested history. Sending {len(arena.chart_history)} points.")
     socketio.emit('chart_history_response', list(arena.chart_history))
 
-# Database Connection
+# Database Connection - with short timeout for Railway (no MongoDB available)
 mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/algoclash')
-try:
-    client = MongoClient(mongo_uri)
-    db = client.get_default_database()
-    print(f"Connected to MongoDB at {mongo_uri}")
-except Exception as e:
-    print(f"Failed to connect to MongoDB: {e}")
-    db = None
+db = None
+if os.getenv('MONGO_URI'):  # Only try to connect if explicitly configured
+    try:
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
+        db = client.get_default_database()
+        # Test connection
+        client.admin.command('ping')
+        print(f"Connected to MongoDB at {mongo_uri}")
+    except Exception as e:
+        print(f"MongoDB not available: {e}")
+        db = None
+else:
+    print("MONGO_URI not set - running without database (no persistence)")
 
 # Add root directory to sys.path to allow sibling imports
 import sys
