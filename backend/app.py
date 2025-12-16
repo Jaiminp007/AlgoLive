@@ -9,13 +9,17 @@ import time
 import requests as http_requests
 from dotenv import load_dotenv
 
+# Monkey-patch for eventlet (must be at very top before other imports)
+import eventlet
+eventlet.monkey_patch()
+
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Keep-alive ping for Render free tier
 def keep_alive():
