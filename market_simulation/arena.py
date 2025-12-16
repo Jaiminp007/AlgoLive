@@ -181,7 +181,8 @@ class Arena:
                         'cash': 10000.0,
                         'total_fees': 0.0,
                         'portfolio': {s: 0.0 for s in self.symbols},
-                        'roi': 0.0
+                        'roi': 0.0,
+                        'cashed_out': 0.0  # Total profits secured via auto cash-out
                     }
                     if not restore and self.db is not None: self._save_agent_state(name)
                 else:
@@ -309,7 +310,8 @@ class Arena:
                 'cash': 10000.0,
                 'total_fees': 0.0,
                 'portfolio': {s: 0.0 for s in self.symbols},
-                'roi': 0.0
+                'roi': 0.0,
+                'cashed_out': 0.0
             })
             
         # 3. DB Reset
@@ -653,11 +655,42 @@ class Arena:
                 data['equity'] = equity
                 data['roi'] = ((equity - 10000) / 10000) * 100
                 
+                # === AUTO CASH-OUT: When ROI >= 0.5%, secure profits and reset ===
+                CASHOUT_THRESHOLD = 0.5  # 0.5% ROI
+                STARTING_EQUITY = 10000.0
+                
+                if data['roi'] >= CASHOUT_THRESHOLD:
+                    profit = equity - STARTING_EQUITY
+                    data['cashed_out'] = data.get('cashed_out', 0.0) + profit
+                    
+                    # Close all positions by converting to cash at current prices
+                    for sym, qty in data['portfolio'].items():
+                        if qty != 0:
+                            price = tickers.get(sym, {}).get('price', 0)
+                            data['cash'] += qty * price  # Add position value to cash
+                            data['portfolio'][sym] = 0.0  # Clear position
+                    
+                    # Reset to starting equity
+                    data['cash'] = STARTING_EQUITY
+                    data['equity'] = STARTING_EQUITY
+                    data['roi'] = 0.0
+                    
+                    print(f"💰 CASH-OUT: {name} secured ${profit:.2f} profit! (Total: ${data['cashed_out']:.2f})")
+                    
+                    # Emit cash-out event to frontend
+                    self.socketio.emit('agent_cashout', {
+                        'agent': name,
+                        'profit': profit,
+                        'total_cashed_out': data['cashed_out'],
+                        'timestamp': ts
+                    })
+                
                 updates.append({
                     'name': name,
-                    'equity': equity,
+                    'equity': data['equity'],
                     'roi': data['roi'],
                     'total_fees': data.get('total_fees', 0.0),
+                    'cashed_out': data.get('cashed_out', 0.0),  # Include cashed out profits
                     'portfolio': data['portfolio'], # Send full portfolio
                     'last_decision': f"{decision} {symbol if symbol else ''}"
                 })
