@@ -9,17 +9,13 @@ import time
 import requests as http_requests
 from dotenv import load_dotenv
 
-# Monkey-patch for gevent (must be at very top before other imports)
-from gevent import monkey
-monkey.patch_all()
-
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Keep-alive ping for Render free tier
 def keep_alive():
