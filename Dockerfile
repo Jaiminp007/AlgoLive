@@ -1,5 +1,5 @@
-# Python Builder stage
-FROM python:3.11-slim as backend
+# Python Backend
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -21,5 +21,5 @@ RUN mkdir -p /app/market_simulation/agents
 # Expose port
 EXPOSE 5000
 
-# Start with gunicorn + gevent for WebSocket support
-CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "backend.app:app"]
+# Run with Python directly (Flask-SocketIO requires this for WebSocket support)
+CMD ["python", "backend/app.py"]
