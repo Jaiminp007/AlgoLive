@@ -66,29 +66,45 @@ brain = Brain()
 # DEFERRED STARTUP: Deploy agents and start arena AFTER server is ready
 def delayed_startup():
     """Run heavy initialization in background to not block healthcheck"""
-    import time
-    time.sleep(5)  # Wait for Flask to be ready
-    
-    import glob
-    agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
-    print(f"Found {len(agent_files)} existing agents to auto-deploy...")
-    
-    for filepath in agent_files:
-        agent_name = os.path.basename(filepath).replace('.py', '')
-        if arena.load_agent(agent_name):
-            print(f"  ✅ Auto-deployed: {agent_name}")
+    try:
+        import time
+        import sys
+        print("[STARTUP] Delayed startup beginning in 5 seconds...", flush=True)
+        sys.stdout.flush()
+        time.sleep(5)
+        
+        print(f"[STARTUP] Agent directory: {arena.agent_dir}", flush=True)
+        
+        import glob
+        agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
+        print(f"[STARTUP] Found {len(agent_files)} agent files: {agent_files}", flush=True)
+        
+        for filepath in agent_files:
+            agent_name = os.path.basename(filepath).replace('.py', '')
+            try:
+                if arena.load_agent(agent_name):
+                    print(f"[STARTUP] ✅ Deployed: {agent_name}", flush=True)
+                else:
+                    print(f"[STARTUP] ❌ Failed: {agent_name}", flush=True)
+            except Exception as e:
+                print(f"[STARTUP] ❌ Error loading {agent_name}: {e}", flush=True)
+        
+        if len(arena.agents) > 0:
+            print(f"[STARTUP] Starting arena with {len(arena.agents)} agents...", flush=True)
+            arena.start_loop()
+            print("[STARTUP] Arena started!", flush=True)
         else:
-            print(f"  ❌ Failed to load: {agent_name}")
-    
-    if len(arena.agents) > 0:
-        print(f"Starting arena with {len(arena.agents)} agents...")
-        arena.start_loop()
-    else:
-        print("No agents loaded - waiting for manual deployment.")
+            print("[STARTUP] No agents loaded - waiting for manual deployment.", flush=True)
+    except Exception as e:
+        import traceback
+        print(f"[STARTUP] FATAL ERROR: {e}", flush=True)
+        traceback.print_exc()
 
 # Start deferred initialization in background thread
+print("[STARTUP] Creating startup thread...", flush=True)
 startup_thread = threading.Thread(target=delayed_startup, daemon=True)
 startup_thread.start()
+print("[STARTUP] Startup thread started!", flush=True)
 
 @app.route('/available_models', methods=['GET'])
 def get_available_models():
