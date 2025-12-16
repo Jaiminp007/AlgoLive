@@ -10,17 +10,16 @@ try:
 except ImportError:
     VADER_AVAILABLE = False
 
-# FinBERT fallback (may crash on Mac - only load if explicitly requested)
+# Try TextBlob as lightweight fallback (no download required)
+try:
+    from textblob import TextBlob
+    TEXTBLOB_AVAILABLE = True
+except ImportError:
+    TEXTBLOB_AVAILABLE = False
+
+# FinBERT disabled by default (too heavy for Railway)
 TRANSFORMERS_AVAILABLE = False
-ENABLE_FINBERT = os.getenv('ENABLE_FINBERT', 'false').lower() == 'true'
-if ENABLE_FINBERT:
-    try:
-        import torch
-        import torch.nn.functional as F
-        from transformers import AutoTokenizer, AutoModelForSequenceClassification
-        TRANSFORMERS_AVAILABLE = True
-    except ImportError:
-        pass
+
 
 # --- Signal 1: Multi-Level Order Book Imbalance (OBI) ---
 def calculate_multilevel_obi(order_book_snapshot, levels=5, decay_rate=0.5):
@@ -138,20 +137,20 @@ def get_microprice_divergence_signal(current_mid, micro_price, threshold_bps=5.0
         return 0  # No Signal (Noise)
 
 
-# --- Signal 3: Sentiment Scoring (VADER or FinBERT) ---
+# --- Signal 3: Sentiment Scoring (VADER, TextBlob, or FinBERT) ---
 class SentimentSignalGenerator:
     def __init__(self, model_name="ProsusAI/finbert"):
         """
         Initializes sentiment analysis.
-        Uses VADER by default (lightweight, no crashes).
-        Only uses FinBERT if ENABLE_FINBERT=true in .env.
+        Priority: VADER > TextBlob > FinBERT (disabled by default)
         """
         self.enabled = False
         self.use_vader = False
+        self.use_textblob = False
         self.use_finbert = False
         
-        # Check environment
-        enable_env = os.getenv('ENABLE_SEMANTIC_ALPHA', 'false').lower() == 'true'
+        # Check environment - default to TRUE for Railway deployment
+        enable_env = os.getenv('ENABLE_SEMANTIC_ALPHA', 'true').lower() == 'true'
         
         if not enable_env:
             print("Sentiment disabled. Set ENABLE_SEMANTIC_ALPHA=true to enable.")
@@ -163,33 +162,23 @@ class SentimentSignalGenerator:
                 self.vader = SentimentIntensityAnalyzer()
                 self.use_vader = True
                 self.enabled = True
-                print("Sentiment: VADER loaded successfully (lightweight, CPU-safe).")
+                print("Sentiment: VADER loaded successfully.")
             except Exception as e:
                 print(f"Failed to load VADER: {e}")
         
-        # Only try FinBERT if explicitly requested AND VADER failed
-        if not self.enabled and TRANSFORMERS_AVAILABLE and ENABLE_FINBERT:
-            print(f"Loading {model_name}...")
-            try:
-                self.device = "cpu"
-                os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
-                self.model = self.model.to(self.device)
-                self.model.eval()
-                self.use_finbert = True
-                self.enabled = True
-                print(f"Sentiment: FinBERT loaded (device: {self.device}).")
-            except Exception as e:
-                print(f"Failed to load FinBERT: {e}")
+        # Try TextBlob (lightweight, no downloads needed)
+        if not self.enabled and TEXTBLOB_AVAILABLE:
+            self.use_textblob = True
+            self.enabled = True
+            print("Sentiment: TextBlob loaded successfully (lightweight).")
         
         if not self.enabled:
-            print("Sentiment: No engine available.")
+            print("Sentiment: No engine available. Install textblob or nltk.")
 
     def get_sentiment_score(self, text_input):
         """
         Calculates a scalar sentiment score (-1 to 1) from text.
-        Uses VADER or FinBERT depending on what's available.
+        Uses VADER > TextBlob in priority order.
         """
         if not self.enabled or not text_input:
             return 0.0
@@ -201,29 +190,11 @@ class SentimentSignalGenerator:
                 # VADER's compound score is already -1 to 1
                 return float(scores['compound'])
             
-            # FinBERT (fallback - heavyweight)
-            elif self.use_finbert:
-                inputs = self.tokenizer(text_input, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
-                    
-                probs = F.softmax(outputs.logits, dim=-1)
-                probs_np = probs.numpy()[0]
-                
-                id2label = self.model.config.id2label
-                pos_score = 0.0
-                neg_score = 0.0
-                
-                for idx, label in id2label.items():
-                    if "positive" in label.lower():
-                        pos_score = probs_np[idx]
-                    elif "negative" in label.lower():
-                        neg_score = probs_np[idx]
-                        
-                sentiment_score = pos_score - neg_score
-                return float(sentiment_score)
+            # TextBlob (fallback - simple)
+            elif self.use_textblob:
+                blob = TextBlob(text_input)
+                # TextBlob polarity is -1 to 1
+                return float(blob.sentiment.polarity)
             
             return 0.0
             

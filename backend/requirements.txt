@@ -12,6 +12,7 @@ gunicorn==23.0.0
 gevent==24.11.1
 gevent-websocket==0.10.1
 azure-ai-inference
-torch
-transformers
 pytrends
+# NOTE: Removed torch & transformers (2GB+) - too heavy for Railway free tier
+# Using textblob for lightweight sentiment analysis instead
+textblob==0.19.0
