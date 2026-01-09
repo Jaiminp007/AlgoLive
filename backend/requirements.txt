@@ -16,3 +16,5 @@ pytrends
 # NOTE: Removed torch & transformers (2GB+) - too heavy for Railway free tier
 # Using textblob for lightweight sentiment analysis instead
 textblob==0.19.0
+
+yfinance==0.2.38
