@@ -83,9 +83,16 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analyst_engine.brain import Brain
 from market_simulation.arena import Arena
 
+# Agents to auto-load on start/reset
+default_agents = [
+    "Agent_10_github_openai_gpt_5",
+    "Agent_11_github_openai_gpt_4o",
+    "Agent_7_github_openai_gpt_5_"
+]
+
 # Global State
 arena = Arena(socketio, db)
-brain = Brain()
+brain = Brain() # Instantiate Brain
 
 # DEFERRED STARTUP: Deploy agents and start arena AFTER server is ready
 def delayed_startup():
