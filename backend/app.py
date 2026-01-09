@@ -46,18 +46,35 @@ def handle_request_history():
     print(f"Client requested history. Sending {len(arena.chart_history)} points.")
     socketio.emit('chart_history_response', list(arena.chart_history))
 
+
 # Database Connection - with short timeout for Railway (no MongoDB available)
 mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/algoclash')
 db = None
+
 if os.getenv('MONGO_URI'):  # Only try to connect if explicitly configured
     try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
+        import certifi
+        print(f"Connecting to MongoDB: {mongo_uri[:20]}...")
+        # OPTION 2 & 3 Combined: Robust SSL + Memory Fallback
+        client = MongoClient(
+            mongo_uri, 
+            serverSelectionTimeoutMS=5000,
+            tls=True,
+            tlsAllowInvalidCertificates=True,
+            directConnection=False,
+            ssl_cert_reqs='CERT_NONE'
+        )
         db = client.get_default_database()
+        
         # Test connection
         client.admin.command('ping')
-        print(f"Connected to MongoDB at {mongo_uri}")
+        print(f"✅ MongoDB connected at {mongo_uri[:20]}...")
     except Exception as e:
-        print(f"MongoDB not available: {e}")
+        print(f"⚠️ MongoDB unavailable: {e}")
+        print("Running in MEMORY-ONLY mode")
+        db = None
+else:
+    print("MONGO_URI not set - running without database (no persistence)")
         db = None
 else:
     print("MONGO_URI not set - running without database (no persistence)")
