@@ -75,9 +75,6 @@ if os.getenv('MONGO_URI'):  # Only try to connect if explicitly configured
         db = None
 else:
     print("MONGO_URI not set - running without database (no persistence)")
-        db = None
-else:
-    print("MONGO_URI not set - running without database (no persistence)")
 
 # Add root directory to sys.path to allow sibling imports
 import sys
