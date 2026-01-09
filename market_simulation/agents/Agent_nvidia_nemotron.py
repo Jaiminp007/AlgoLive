@@ -164,6 +164,7 @@ def execute_strategy(
     best_sym = None
     best_score = 0
 
+    symbols = ['BTC', 'ETH', 'SOL']
     for sym in symbols:
         # Skip if we already hold a position (single‑position policy)
         if portfolio.get(sym, 0.0) != 0.0:
