@@ -16,7 +16,7 @@ const LiveChart = ({ data, agents }) => {
                 </div>
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={data}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} opacity={0.5} />
 
                         {/* X Axis */}
                         <XAxis
@@ -24,7 +24,7 @@ const LiveChart = ({ data, agents }) => {
                             type="number"
                             domain={['dataMin', 'dataMax']}
                             tickFormatter={(unix) => new Date(unix * 1000).toLocaleTimeString()}
-                            stroke="#5c5f80"
+                            stroke="#2a2d50"
                             fontSize={10}
                             tick={{ fill: '#a0a5cc' }}
                         />
@@ -34,22 +34,23 @@ const LiveChart = ({ data, agents }) => {
                             yAxisId="left"
                             orientation="left"
                             domain={['auto', 'auto']}
-                            stroke="#a0a5cc"
+                            stroke="#2a2d50"
                             width={60}
                             fontSize={10}
-                            tick={{ fill: '#fff' }}
+                            tick={{ fill: '#a0a5cc' }}
                             tickFormatter={(val) => `$${val.toLocaleString()}`}
                         />
 
                         <Tooltip
                             contentStyle={{
-                                backgroundColor: 'rgba(20, 22, 46, 0.95)',
+                                backgroundColor: 'rgba(15, 16, 38, 0.95)',
                                 borderColor: '#2a2d50',
                                 color: '#fff',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                                borderRadius: '8px'
                             }}
-                            itemStyle={{ fontSize: '12px' }}
-                            labelStyle={{ color: '#a0a5cc' }}
+                            itemStyle={{ fontSize: '12px', padding: '0' }}
+                            labelStyle={{ color: '#a0a5cc', marginBottom: '5px' }}
                             labelFormatter={(label) => new Date(label * 1000).toLocaleTimeString()}
                         />
 

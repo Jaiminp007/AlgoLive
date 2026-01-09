@@ -33,7 +33,8 @@ class Arena:
         self.agents = {} 
         # Agents are now in the 'agents' subdirectory of market_simulation
         self.agent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents")
-        self.symbols = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ZEC", "TRX", "SUI", "LINK", "PEPE", "SHIB", "WIF", "ADA", "AVAX"]
+        # Use symbols from DataFeed (supports both Crypto and Stocks)
+        self.symbols = self.data_feed.symbols
         
         # O(1) deque for chart history (Equity Curve)
         self.chart_history = deque(maxlen=50000)
@@ -59,11 +60,13 @@ class Arena:
         # ANALYST ENGINE INIT
         if ANALYST_AVAILABLE:
             self.analyst = Analyst()
-            self.news_feed = NewsFeed()
+            self.news_feed_engine = NewsFeed() # Rename to avoid conflict
             print("Arena: Analyst Engine initialized.")
         else:
             self.analyst = None
-            self.news_feed = None
+            self.news_feed_engine = None
+            
+        self.ui_news = [] # Dedicated buffer for UI
         
         self.current_market_state = {}
         self.last_analyst_update = 0
@@ -144,10 +147,22 @@ class Arena:
             for doc in saved:
                 name = doc['name']
                 if self.load_agent(name):
-                    self.agents[name]['equity'] = doc.get('equity', 10000.0)
-                    self.agents[name]['cash'] = doc.get('cash', 10000.0)
+                    self.agents[name]['equity'] = doc.get('equity', 100.0)
+                    self.agents[name]['cash'] = doc.get('cash', 100.0)
                     self.agents[name]['total_fees'] = doc.get('total_fees', 0.0)
                     self.agents[name]['portfolio'] = doc.get('portfolio', {s: 0.0 for s in self.symbols})
+
+                    # === FIX #1: Restore entry prices and custom state ===
+                    self.agents[name]['entry_prices'] = doc.get('entry_prices', {})
+                    self.agents[name]['custom_state'] = doc.get('custom_state', {})
+                    self.agents[name]['trade_history'] = doc.get('trade_history', [])
+
+                    # Restore Metrics
+                    self.agents[name]['trades_count'] = doc.get('trades_count', 0)
+                    self.agents[name]['wins'] = doc.get('wins', 0)
+                    self.agents[name]['win_rate'] = doc.get('win_rate', 0.0)
+                    self.agents[name]['returns_history'] = doc.get('returns_history', [])
+                    self.agents[name]['sharpe'] = doc.get('sharpe', 0.0)
                     count += 1
                 else:
                     self.db.agents.delete_one({'name': name})
@@ -177,12 +192,22 @@ class Arena:
                 if name not in self.agents:
                     self.agents[name] = {
                         'instance': instance,
-                        'equity': 10000.0,
-                        'cash': 10000.0,
+                        'equity': 100.0,
+                        'cash': 100.0,
                         'total_fees': 0.0,
                         'portfolio': {s: 0.0 for s in self.symbols},
                         'roi': 0.0,
-                        'cashed_out': 0.0  # Total profits secured via auto cash-out
+                        'cashed_out': 0.0,
+                        # === FIX #1: State persistence fields ===
+                        'entry_prices': {},       # Track entry prices for positions
+                        'custom_state': {},       # Agent's custom persistent state
+                        'trade_history': [],      # Recent trade log
+                        # --- METRICS ---
+                        'trades_count': 0,
+                        'wins': 0,
+                        'win_rate': 0.0,
+                        'returns_history': [],
+                        'sharpe': 0.0
                     }
                     if not restore and self.db is not None: self._save_agent_state(name)
                 else:
@@ -215,6 +240,10 @@ class Arena:
         # Evolution Manager Thread
         self.evolution_thread = threading.Thread(target=self._evolution_manager, daemon=True)
         self.evolution_thread.start()
+        
+        # News Producer Thread
+        self.news_thread = threading.Thread(target=self._news_producer, daemon=True)
+        self.news_thread.start()
         
         print("Arena: Threads Started")
 
@@ -282,7 +311,7 @@ class Arena:
             except: pass
             
         start_time = datetime.now().timestamp() * 1000
-        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 10000.0 for n in default_agents}}
+        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 100.0 for n in default_agents}}
         self.chart_history.append(initial)
         if self.db is not None: self.db.chart_history.insert_one(initial.copy())
         
@@ -306,12 +335,16 @@ class Arena:
         # 2. Reset Agents
         for name in self.agents:
             self.agents[name].update({
-                'equity': 10000.0,
-                'cash': 10000.0,
+                'equity': 100.0,
+                'cash': 100.0,
                 'total_fees': 0.0,
                 'portfolio': {s: 0.0 for s in self.symbols},
                 'roi': 0.0,
-                'cashed_out': 0.0
+                'cashed_out': 0.0,
+                # === FIX #1: Clear state on reset ===
+                'entry_prices': {},
+                'custom_state': {},
+                'trade_history': []
             })
             
         # 3. DB Reset
@@ -327,7 +360,7 @@ class Arena:
 
         # 4. Re-init Chart
         start_time = datetime.now().timestamp() * 1000
-        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 10000.0 for n in self.agents.keys()}}
+        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 100.0 for n in self.agents.keys()}}
         self.chart_history.append(initial)
         if self.db is not None: self.db.chart_history.insert_one(initial.copy())
         
@@ -349,6 +382,28 @@ class Arena:
                 print(f"Producer Error: {e}")
                 time.sleep(5)
 
+    def _news_producer(self):
+        print("News Producer: Started")
+        while self.running:
+            try:
+                headlines = self.data_feed.get_news()
+                if headlines:
+                    # Append new unique headlines
+                    for h in headlines:
+                        if h['title'] not in [x['title'] for x in self.ui_news]:
+                            self.ui_news.insert(0, h)
+                            # Keep size manageable
+                            if len(self.ui_news) > 50: self.ui_news.pop()
+                            
+                            # Emit Update
+                            self.socketio.emit('news_update', h)
+                            print(f"📰 News: {h['title']} ({h['sentiment']:.2f})")
+                
+                time.sleep(30) # Check every 30s
+            except Exception as e:
+                print(f"News Producer Error: {e}")
+                time.sleep(60)
+
     def _loop(self):
         tick_counter = 0
         last_ts = 0
@@ -361,8 +416,10 @@ class Arena:
                 time.sleep(0.1)
                 continue
             
-            # Use BTC timestamp as reference
-            ts = tickers.get('BTC', {}).get('timestamp', 0)
+            # Use Benchmark timestamp as reference (BTC or First available)
+            benchmark_sym = 'BTC' if 'BTC' in tickers else list(tickers.keys())[0]
+            ts = tickers.get(benchmark_sym, {}).get('timestamp', 0)
+            
             if ts == last_ts:
                 time.sleep(0.1)
                 continue
@@ -389,14 +446,14 @@ class Arena:
                     
                     last_vol = self.market_history[sym][-1]['volume_cum'] if (self.market_history[sym] and 'volume_cum' in self.market_history[sym][-1]) else vol
                     # Handle 24h reset or huge jump. If vol < last_vol, it reset.
-                    if vol < last_vol: delta_vol = vol 
+                    if vol < last_vol: delta_vol = vol
                     else: delta_vol = vol - last_vol
-                    
-                    # Synthetic HFT Noise Injection (Simulation Fidelity)
-                    # If data is stale (delta_vol=0), we simulate micro-transactions to keep signals alive
-                    if delta_vol == 0:
-                         delta_vol = np.random.uniform(0.01, 1.0) # Small noise
-                    
+
+                    # === FIX #3: Remove fake volume noise injection ===
+                    # Old: Random noise when delta_vol == 0 gave agents fake signals
+                    # New: Zero volume is real information - no activity = no signal
+                    # delta_vol == 0 is legitimate and should stay 0
+
                     # Apply Tick Rule to DELTA volume
                     if current_price > prev_price:
                         buy_vol = delta_vol
@@ -405,10 +462,9 @@ class Arena:
                         buy_vol = 0
                         sell_vol = delta_vol
                     else:
-                        # If price flat, random split (Noise)
-                        split = np.random.random()
-                        buy_vol = delta_vol * split
-                        sell_vol = delta_vol * (1 - split)
+                        # === FIX #3: If price flat, split evenly (no random noise) ===
+                        buy_vol = delta_vol * 0.5
+                        sell_vol = delta_vol * 0.5
 
                     self.market_history[sym].append({
                         'timestamp': data['timestamp'],
@@ -438,18 +494,18 @@ class Arena:
                 except: pass
 
             # Prepare Market Data for Agents
-            # 1. Calc Global Sentiment (Lightweight check: only revisit if news changed or periodically)
-            # For this MVP, we just take the first headline from mock news
+            # === MODERATE FIX: Enable real sentiment analysis ===
             sentiment_score = 0.0
             try:
-                if self.sentiment_engine:
-                    # In production, we'd only run this on new news.
-                    # For demo, we just pick one random headline or the top one.
-                    # Using a cache would be better to avoid 1s inference lag.
-                    news_items = self.data_feed.get_news() 
-                    headline = news_items[0] if news_items else ""
-                    sentiment_score = self.sentiment_engine.get_sentiment_score(headline)
-            except Exception:
+                if self.sentiment_engine and self.ui_news:
+                    # Use the most recent news headline from UI buffer
+                    latest_news = self.ui_news[0] if self.ui_news else None
+                    if latest_news:
+                        headline = latest_news.get('title', '')
+                        if headline:
+                            sentiment_score = self.sentiment_engine.get_sentiment_score(headline)
+            except Exception as e:
+                # Silently fall back to 0.0 on error
                 sentiment_score = 0.0
             
             # 2. Update Attention (Google Trends) - cached hourly
@@ -561,7 +617,7 @@ class Arena:
                     
                     self.current_market_state = self.analyst.compute_state(
                         market_history=self.market_history,
-                        news_feed=self.news_feed,
+                        news_feed=self.news_feed_engine,
                         sentiment_engine=self.sentiment_engine,
                         order_book_snapshot=order_book_snapshot
                     )
@@ -575,15 +631,17 @@ class Arena:
                     print(f"Arena: Analyst Engine error: {e}")
             
             # Broadcast
-            btc_price = tickers.get('BTC', {}).get('price', 0)
+            # Determine Benchmark Price (BTC for Crypto, SPY or First for Stocks)
+            benchmark_sym = 'BTC' if 'BTC' in self.symbols else ('SPY' if 'SPY' in self.symbols else self.symbols[0])
+            benchmark_price = tickers.get(benchmark_sym, {}).get('price', 0)
             
-            self.socketio.emit('market_tick', {'price': btc_price, 'timestamp': ts})
+            self.socketio.emit('market_tick', {'price': benchmark_price, 'timestamp': ts})
             
             # Chart update - SAFEGUARD against bad data
-            if ts > 0 and btc_price > 0:
+            if ts > 0 and benchmark_price > 0:
                 chart_payload = {
                     'timestamp': ts,
-                    'price': btc_price,
+                    'price': benchmark_price,
                     'agents': {n: d['equity'] for n, d in self.agents.items()}
                 }
                 self.chart_history.append(chart_payload)
@@ -601,19 +659,55 @@ class Arena:
                 decision, symbol, quantity = "HOLD", None, 0
                 
                 try:
-                    # execute_strategy(market_data, tick, cash, portfolio, market_state)
+                    # === FIX #1: Build agent_state with entry prices and current PnL ===
+                    agent_state = {
+                        'entry_prices': data.get('entry_prices', {}),
+                        'trade_history': data.get('trade_history', [])[-20:],  # Last 20 trades
+                        'custom': data.get('custom_state', {}),
+                        'current_pnl': {}  # Calculate PnL for each open position
+                    }
+
+                    # Calculate unrealized PnL for each open position
+                    for asset, pos_qty in data['portfolio'].items():
+                        if pos_qty != 0 and asset in data.get('entry_prices', {}):
+                            entry = data['entry_prices'][asset]
+                            current = tickers.get(asset, {}).get('price', 0)
+                            if entry > 0 and current > 0:
+                                if pos_qty > 0:  # Long position
+                                    pnl_pct = ((current - entry) / entry) * 100
+                                else:  # Short position
+                                    pnl_pct = ((entry - current) / entry) * 100
+                                agent_state['current_pnl'][asset] = {
+                                    'pnl_percent': pnl_pct,
+                                    'pnl_usd': (current - entry) * pos_qty if pos_qty > 0 else (entry - current) * abs(pos_qty),
+                                    'entry_price': entry,
+                                    'current_price': current
+                                }
+
+                    # execute_strategy(market_data, tick, cash, portfolio, market_state, agent_state)
                     # Pass market_state for agents that want enriched intelligence
                     try:
                         res = agent.execute_strategy(
-                            market_data, 
-                            tick_counter, 
-                            data['cash'], 
+                            market_data,
+                            tick_counter,
+                            data['cash'],
                             data['portfolio'],
-                            market_state=self.current_market_state
+                            market_state=self.current_market_state,
+                            agent_state=agent_state  # NEW: Pass persistent state
                         )
                     except TypeError:
-                        # Backward compatibility: agent doesn't accept market_state
-                        res = agent.execute_strategy(market_data, tick_counter, data['cash'], data['portfolio'])
+                        # Backward compatibility: try without agent_state
+                        try:
+                            res = agent.execute_strategy(
+                                market_data,
+                                tick_counter,
+                                data['cash'],
+                                data['portfolio'],
+                                market_state=self.current_market_state
+                            )
+                        except TypeError:
+                            # Backward compatibility: agent doesn't accept market_state
+                            res = agent.execute_strategy(market_data, tick_counter, data['cash'], data['portfolio'])
                     
                     if isinstance(res, tuple) and len(res) == 3:
                         decision, symbol, quantity = res
@@ -654,11 +748,13 @@ class Arena:
                     equity += qty * price
                 
                 data['equity'] = equity
-                data['roi'] = ((equity - 10000) / 10000) * 100
+                data['roi'] = ((equity - 100) / 100) * 100
                 
-                # === AUTO CASH-OUT: When ROI >= 0.5%, secure profits and reset ===
-                CASHOUT_THRESHOLD = 0.5  # 0.5% ROI
-                STARTING_EQUITY = 10000.0
+                # === FIX #2: Increased cash-out threshold to beat transaction costs ===
+                # Old: 0.125% was less than fees (0.075% + slippage = ~0.15% round trip)
+                # New: 0.50% ensures positive expectancy after costs
+                CASHOUT_THRESHOLD = 0.50  # 0.50% ROI (Realistic Scalping Target)
+                STARTING_EQUITY = 100.0
                 
                 if data['roi'] >= CASHOUT_THRESHOLD:
                     profit = equity - STARTING_EQUITY
@@ -677,7 +773,10 @@ class Arena:
                     data['roi'] = 0.0
                     
                     print(f"💰 CASH-OUT: {name} secured ${profit:.2f} profit! (Total: ${data['cashed_out']:.2f})")
-                    
+
+                    # Clear entry prices on cashout
+                    data['entry_prices'] = {}
+
                     # Emit cash-out event to frontend
                     self.socketio.emit('agent_cashout', {
                         'agent': name,
@@ -685,15 +784,53 @@ class Arena:
                         'total_cashed_out': data['cashed_out'],
                         'timestamp': ts
                     })
-                
+
+                # === FIX #4: Emergency Stop-Loss (Arena Safety Net) ===
+                # If agent is losing badly (-2% from starting equity), force close all positions
+                # This prevents catastrophic losses when agents fail to manage risk
+                EMERGENCY_STOP_LOSS = -2.0  # -2% account drawdown triggers emergency exit
+                if data['roi'] <= EMERGENCY_STOP_LOSS:
+                    loss = STARTING_EQUITY - equity
+                    print(f"🚨 EMERGENCY STOP: {name} hit -{abs(data['roi']):.2f}% drawdown. Closing all positions.")
+
+                    # Close all positions
+                    for sym, qty in data['portfolio'].items():
+                        if qty != 0:
+                            price = tickers.get(sym, {}).get('price', 0)
+                            if qty > 0:
+                                data['cash'] += qty * price
+                            else:  # Short position
+                                data['cash'] += qty * price  # qty is negative, so this subtracts
+                            data['portfolio'][sym] = 0.0
+
+                    # Clear entry prices
+                    data['entry_prices'] = {}
+
+                    # Recalculate equity
+                    data['equity'] = data['cash']
+                    data['roi'] = ((data['equity'] - STARTING_EQUITY) / STARTING_EQUITY) * 100
+
+                    # Emit emergency stop event
+                    self.socketio.emit('emergency_stop', {
+                        'agent': name,
+                        'loss': loss,
+                        'final_equity': data['equity'],
+                        'timestamp': ts
+                    })
+
                 updates.append({
                     'name': name,
                     'equity': data['equity'],
                     'roi': data['roi'],
+                    'cash': data['cash'],
                     'total_fees': data.get('total_fees', 0.0),
-                    'cashed_out': data.get('cashed_out', 0.0),  # Include cashed out profits
-                    'portfolio': data['portfolio'], # Send full portfolio
-                    'last_decision': f"{decision} {symbol if symbol else ''}"
+                    'cashed_out': data.get('cashed_out', 0.0),
+                    'portfolio': data['portfolio'],
+                    'last_decision': f"{decision} {symbol if symbol else ''}",
+                    # --- NEW METRICS ---
+                    'trades': data.get('trades_count', 0),
+                    'win_rate': round((data.get('wins', 0) / data.get('trades_count', 1)) * 100, 1) if data.get('trades_count', 0) > 0 else 0.0,
+                    'sharpe': round(data.get('sharpe', 0.0), 2)
                 })
 
             # Broadcast bundle
@@ -716,41 +853,42 @@ class Arena:
                 states = {n: {k: v for k, v in d.items() if k != 'instance'} for n, d in self.agents.items()}
                 self._db_queue.put(('agents_bulk', states))
             
-            # SUPERVISOR CHECK (Strategy Management)
-            try:
-                current_ts = time.time() # Seconds
-                actions = self.supervisor.monitor(self.agents, self.market_history, current_ts)
-                
-                if actions:
-                    print(f"Arena: Supervisor triggered {len(actions)} actions.")
-                    from analyst_engine.brain import Brain
-                    brain = Brain() # Instantiate locally to avoid circular import issues if any
-                    
-                    for act in actions:
-                        if act['action'] == 'KILL':
-                            name = act['agent']
-                            reason = act['reason']
-                            print(f"Arena: KILLING {name} due to: {reason}")
-                            
-                            # Notify Frontend
-                            self.socketio.emit('agent_regenerating', {'name': name, 'critique': reason})
-                            
-                            # Trigger Evolution (Soft Kill / Refactor)
-                            # We use existing code as base but force a major rethink via critique
-                            if name in self.agents:
-                                old_code = ""
-                                filepath = os.path.join(self.agent_dir, f"{name}.py")
-                                if os.path.exists(filepath):
-                                    with open(filepath, 'r') as f: old_code = f.read()
-                                
-                                result = brain.evolve_agent(name, reason, old_code)
-                                
-                                if result.get("success"):
-                                    print(f"Arena: Supervisor successfully revived {name}")
-                                    self.load_agent(name, reload_module=True)
-                                    self.socketio.emit('agent_deployed', {'name': name})
-            except Exception as e:
-                print(f"Arena: Supervisor Check Error: {e}")
+            # SUPERVISOR CHECK (Strategy Management) - DISABLED to prevent automatic regeneration
+            # Uncomment below to re-enable automatic agent evolution based on market triggers
+            # try:
+            #     current_ts = time.time() # Seconds
+            #     actions = self.supervisor.monitor(self.agents, self.market_history, current_ts)
+            #     
+            #     if actions:
+            #         print(f"Arena: Supervisor triggered {len(actions)} actions.")
+            #         from analyst_engine.brain import Brain
+            #         brain = Brain() # Instantiate locally to avoid circular import issues if any
+            #         
+            #         for act in actions:
+            #             if act['action'] == 'KILL':
+            #                 name = act['agent']
+            #                 reason = act['reason']
+            #                 print(f"Arena: KILLING {name} due to: {reason}")
+            #                 
+            #                 # Notify Frontend
+            #                 self.socketio.emit('agent_regenerating', {'name': name, 'critique': reason})
+            #                 
+            #                 # Trigger Evolution (Soft Kill / Refactor)
+            #                 # We use existing code as base but force a major rethink via critique
+            #                 if name in self.agents:
+            #                     old_code = ""
+            #                     filepath = os.path.join(self.agent_dir, f"{name}.py")
+            #                     if os.path.exists(filepath):
+            #                         with open(filepath, 'r') as f: old_code = f.read()
+            #                     
+            #                     result = brain.evolve_agent(name, reason, old_code)
+            #                     
+            #                     if result.get("success"):
+            #                         print(f"Arena: Supervisor successfully revived {name}")
+            #                         self.load_agent(name, reload_module=True)
+            #                         self.socketio.emit('agent_deployed', {'name': name})
+            # except Exception as e:
+            #     print(f"Arena: Supervisor Check Error: {e}")
 
             tick_counter += 1
             time.sleep(1)
@@ -766,8 +904,10 @@ class Arena:
         price = tickers.get(symbol, {}).get('price', 0)
         if price <= 0: return False, 0.0
         
-        # Realistic fee structure (Binance VIP0: 0.1% maker, 0.1% taker -> avg 0.075% with BNB discount)
-        fee_rate = 0.00075  # 0.075% fee
+        # === FIX #2: Realistic fee structure ===
+        # Binance VIP0: 0.1% maker, 0.1% taker -> avg 0.075% with BNB discount
+        # Old: 0.01% was unrealistically low
+        fee_rate = 0.00075  # 0.075% fee (Realistic tier)
         
         # Simulate execution slippage (0.01% - 0.05% adverse price movement)
         slippage = np.random.uniform(0.0001, 0.0005)
@@ -791,7 +931,71 @@ class Arena:
             max_long = total_equity * 4
             buying_power = max_long - current_long_value
             
-            if buying_power >= cost:
+            # LOGIC FIX: If we are covering a short (curr_qty < 0), we shouldn't be limited by "Buying Power" (Max Long Leverage).
+            # We are reducing risk, not increasing it.
+            curr_qty = data['portfolio'].get(symbol, 0)
+            
+            allowed = False
+            if curr_qty < 0:
+                # Covering Short: Only check if we have enough Cash (Liquidity)
+                # We already received cash when we sold, so this should usually pass unless we lost too much.
+                if data['cash'] >= total_req:
+                    allowed = True
+            else:
+                # Opening/Increasing Long: Check Leverage
+                if buying_power >= cost and data['cash'] >= total_req:
+                    allowed = True
+            
+            if allowed:
+                # --- METRICS & ENTRY PRICE UPDATE ---
+                data['trades_count'] = data.get('trades_count', 0) + 1
+
+                # Calculate new Weighted Average Entry Price
+                prev_qty = data['portfolio'].get(symbol, 0)
+                prev_entry = data.get('entry_prices', {}).get(symbol, 0.0)
+
+                if 'entry_prices' not in data: data['entry_prices'] = {}
+                if 'trade_history' not in data: data['trade_history'] = []
+
+                # === FIX #1: Proper entry price handling for BUY ===
+                if prev_qty < 0:
+                    # Covering a short position
+                    new_qty = prev_qty + quantity
+                    if new_qty >= 0:
+                        # Position fully closed or flipped to long
+                        # Clear the short entry price
+                        if symbol in data['entry_prices']:
+                            del data['entry_prices'][symbol]
+                        # If flipped to long, set new entry
+                        if new_qty > 0:
+                            data['entry_prices'][symbol] = price
+                    # else: still short, keep existing entry
+                else:
+                    # Opening or adding to long
+                    new_qty = prev_qty + quantity
+                    if new_qty > 0:
+                        if prev_qty > 0 and prev_entry > 0:
+                            # Weighted average
+                            total_cost = (prev_qty * prev_entry) + (quantity * price)
+                            avg_entry = total_cost / new_qty
+                            data['entry_prices'][symbol] = avg_entry
+                        else:
+                            # New position
+                            data['entry_prices'][symbol] = price
+
+                # Record trade in history
+                data['trade_history'].append({
+                    'action': 'BUY',
+                    'symbol': symbol,
+                    'quantity': quantity,
+                    'price': price,
+                    'fee': fee,
+                    'timestamp': int(time.time() * 1000)
+                })
+                # Keep history bounded
+                if len(data['trade_history']) > 100:
+                    data['trade_history'] = data['trade_history'][-100:]
+
                 data['cash'] -= total_req
                 data['portfolio'][symbol] = data['portfolio'].get(symbol, 0) + quantity
                 data['total_fees'] = data.get('total_fees', 0.0) + fee
@@ -799,34 +1003,83 @@ class Arena:
                 return True, fee
 
         elif decision == "SELL":
-            # Check shorting or closing?
             curr_qty = data['portfolio'].get(symbol, 0)
-            
-            # If we have positive holdings, selling reduces them (Close Long)
-            # If we are flat/negative, selling increases short (Open Short)
-            
+
             revenue = quantity * price
             fee = revenue * fee_rate
             proceeds = revenue - fee
-            
-            # Safety checks for shorting leverage could be added here
+
+            if 'entry_prices' not in data: data['entry_prices'] = {}
+            if 'trade_history' not in data: data['trade_history'] = []
+
+            # --- METRICS: Track Wins (Long Only for now) ---
+            if curr_qty > 0:
+                entry_price = data.get('entry_prices', {}).get(symbol, 0.0)
+                if entry_price > 0 and price > entry_price:
+                    data['wins'] = data.get('wins', 0) + 1
+
+            data['trades_count'] = data.get('trades_count', 0) + 1
+
+            # Safety checks for shorting leverage
             max_short = total_equity * 4
             current_short_value = sum([abs(q) * tickers.get(s, {}).get('price', 0) for s, q in data['portfolio'].items() if q < 0])
-            
+
             if curr_qty <= 0:
                 # Opening/Increasing Short
                 if (max_short - current_short_value) >= revenue:
+                    # === FIX #1: Track entry price for shorts ===
+                    if curr_qty == 0:
+                        # New short position
+                        data['entry_prices'][symbol] = price
+                    # else: already short, keep existing entry (could do weighted avg)
+
                     data['cash'] += proceeds
                     data['portfolio'][symbol] = curr_qty - quantity
                     data['total_fees'] = data.get('total_fees', 0.0) + fee
+
+                    # Record trade
+                    data['trade_history'].append({
+                        'action': 'SELL',
+                        'symbol': symbol,
+                        'quantity': quantity,
+                        'price': price,
+                        'fee': fee,
+                        'timestamp': int(time.time() * 1000)
+                    })
+                    if len(data['trade_history']) > 100:
+                        data['trade_history'] = data['trade_history'][-100:]
+
                     print(f"{name} SHORTED {quantity} {symbol} @ {price} (Fee: {fee:.4f})")
                     return True, fee
             else:
                 # Closing Long
+                new_qty = curr_qty - quantity
+
+                # === FIX #1: Clear entry price when fully closed ===
+                if new_qty <= 0:
+                    if symbol in data['entry_prices']:
+                        del data['entry_prices'][symbol]
+                    # If flipped to short, set new entry
+                    if new_qty < 0:
+                        data['entry_prices'][symbol] = price
+
                 data['cash'] += proceeds
-                data['portfolio'][symbol] = curr_qty - quantity
+                data['portfolio'][symbol] = new_qty
                 data['total_fees'] = data.get('total_fees', 0.0) + fee
+
+                # Record trade
+                data['trade_history'].append({
+                    'action': 'SELL',
+                    'symbol': symbol,
+                    'quantity': quantity,
+                    'price': price,
+                    'fee': fee,
+                    'timestamp': int(time.time() * 1000)
+                })
+                if len(data['trade_history']) > 100:
+                    data['trade_history'] = data['trade_history'][-100:]
+
                 print(f"{name} SOLD {quantity} {symbol} @ {price} (Fee: {fee:.4f})")
                 return True, fee
-                
+
         return False, 0.0

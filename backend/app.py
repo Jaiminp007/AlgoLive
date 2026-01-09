@@ -2,12 +2,16 @@ from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from pymongo import MongoClient
+from datetime import datetime
 import os
 import json
 import threading
 import time
 import requests as http_requests
 from dotenv import load_dotenv
+
+# Track server start time for uptime calculation
+START_TIME = time.time()
 
 # Load environment variables
 load_dotenv()
@@ -146,8 +150,80 @@ def get_status():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint for Render keep-alive"""
-    return jsonify({'status': 'healthy', 'timestamp': time.time()})
+    """
+    Enhanced health check endpoint for Render keep-alive and monitoring.
+    Returns detailed metrics about the service status.
+    """
+    try:
+        # Calculate uptime
+        uptime_seconds = time.time() - START_TIME
+        uptime_hours = uptime_seconds / 3600
+
+        # Get agent statistics
+        active_agents = len(arena.agents)
+        total_trades = 0
+        total_equity = 0
+        total_cashed_out = 0
+
+        if active_agents > 0:
+            for agent_name, agent_data in arena.agents.items():
+                total_trades += agent_data.get('trades_count', 0)
+                total_equity += agent_data.get('equity', 100.0)
+                total_cashed_out += agent_data.get('cashed_out', 0.0)
+
+        # Calculate average ROI
+        avg_roi = 0
+        if active_agents > 0:
+            avg_roi = ((total_equity - (active_agents * 100)) / (active_agents * 100)) * 100
+
+        response = {
+            'status': 'healthy',
+            'timestamp': datetime.utcnow().isoformat(),
+            'uptime_seconds': round(uptime_seconds, 2),
+            'uptime_hours': round(uptime_hours, 2),
+            'service': 'AlgoClash Backend',
+            'version': '2.0.0',
+            'arena': {
+                'running': arena.running,
+                'tick_count': getattr(arena, 'tick_count', 0)
+            },
+            'agents': {
+                'active': active_agents,
+                'total_trades': total_trades,
+                'total_equity': round(total_equity, 2),
+                'total_cashed_out': round(total_cashed_out, 2),
+                'avg_roi': round(avg_roi, 3)
+            },
+            'database': {
+                'connected': db is not None
+            },
+            'environment': 'render' if os.getenv('RENDER') else 'local'
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
+
+
+@app.route('/')
+def root():
+    """Root endpoint with API info"""
+    return jsonify({
+        'message': 'AlgoClash Live - AI Trading Arena',
+        'status': 'running',
+        'endpoints': {
+            'health': '/health',
+            'status': '/status',
+            'generate_agent': '/generate_agent (POST)',
+            'deploy_agent': '/deploy_agent (POST)',
+            'available_models': '/available_models'
+        }
+    }), 200
 
 @app.route('/generate_agent', methods=['POST'])
 def generate_agent():

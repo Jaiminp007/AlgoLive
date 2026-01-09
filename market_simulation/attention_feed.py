@@ -23,7 +23,9 @@ class AttentionFeed:
     def __init__(self):
         self.cache = {}  # {symbol: attention_score}
         self.last_update = 0
+        self.last_error = 0  # Track last error time for cooldown
         self.update_interval = 3600  # 1 hour to avoid rate limits
+        self.error_cooldown = 300  # 5 minute cooldown after errors
         
         # Map crypto symbols to Google search terms
         self.search_terms = {
@@ -65,9 +67,13 @@ class AttentionFeed:
         if current_time - self.last_update < self.update_interval and self.cache:
             return {sym: self.cache.get(sym, 0.0) for sym in symbols}
         
-        # If PyTrends not available, return zeros
+        # Error cooldown - don't retry too fast after rate limit
+        if current_time - self.last_error < self.error_cooldown:
+            return {sym: self.cache.get(sym, 0.0) for sym in symbols}
+        
+        # If PyTrends not available, return cached or zeros
         if not PYTRENDS_AVAILABLE or self.pytrends is None:
-            return {sym: 0.0 for sym in symbols}
+            return {sym: self.cache.get(sym, 0.0) for sym in symbols}
         
         try:
             # Get search terms for requested symbols
@@ -78,8 +84,8 @@ class AttentionFeed:
             df = self.pytrends.interest_over_time()
             
             if df.empty:
-                print("AttentionFeed: No data returned from Google Trends")
-                return {sym: 0.0 for sym in symbols}
+                # Don't log this every time, just return cache
+                return {sym: self.cache.get(sym, 0.0) for sym in symbols}
             
             # Calculate attention velocity (current vs average)
             result = {}
@@ -107,6 +113,11 @@ class AttentionFeed:
             return result
             
         except Exception as e:
-            print(f"AttentionFeed: Error fetching trends: {e}")
+            # Set error cooldown to prevent spam
+            self.last_error = current_time
+            # Only log first error, not every tick
+            if current_time - self.last_update > self.update_interval:
+                print(f"AttentionFeed: Rate limited, using cache for 5 mins")
             # Return cached values on error
             return {sym: self.cache.get(sym, 0.0) for sym in symbols}
+

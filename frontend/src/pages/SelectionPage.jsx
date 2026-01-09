@@ -1,15 +1,16 @@
 import { useEffect } from 'react';
 import AgentSelection from '../components/AgentSelection';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../api';
 
 const SelectionPage = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
         // Check if arena is already running
-        fetch('http://localhost:5000/status')
-            .then(res => res.json())
-            .then(data => {
+        api.get('/status')
+            .then(res => {
+                const data = res.data;
                 if (data.arena_running && data.agent_count > 0) {
                     console.log("Arena running, redirecting to dashboard...");
                     navigate('/dashboard');

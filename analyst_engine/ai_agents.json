@@ -52,7 +52,8 @@
         "deepseek/deepseek-r1-distill-llama-70b"
     ],
     "NVidia": [
-        "nvidia/nemotron-nano-9b-v2:free"
+        "nvidia/nemotron-nano-9b-v2:free",
+        "nvidia/nemotron-3-nano-30b-a3b:free"
     ],
     "Mistral": [
         "mistralai/devstral-2512:free"

@@ -1,0 +1,83 @@
+name: Keep Render Alive
+
+# Run every 14 minutes to prevent Render free tier from sleeping
+on:
+  schedule:
+    - cron: '*/14 * * * *'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  ping-backend:
+    name: Ping AlgoClash Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Ping the backend health endpoint
+      - name: Ping Backend Health Endpoint
+        id: ping
+        run: |
+          echo "Pinging AlgoClash backend..."
+          echo "Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+          # Make the request and capture response
+          # NOTE: Replace YOUR_SERVICE_NAME with your actual Render service name
+          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            ${{ secrets.RENDER_URL }}/health 2>/dev/null || \
+            curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            https://algoclash-backend.onrender.com/health)
+
+          # Extract status code
+          http_code=$(echo "$response" | grep HTTP_STATUS | cut -d: -f2)
+          body=$(echo "$response" | sed '/HTTP_STATUS/d')
+
+          echo "HTTP Status: $http_code"
+          echo "Response Body: $body"
+
+          # Check if successful
+          if [ "$http_code" -eq 200 ]; then
+            echo "Ping successful!"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "Ping returned non-200 status"
+            echo "status=warning" >> $GITHUB_OUTPUT
+          fi
+
+      # Step 2: Parse and display key metrics
+      - name: Display Backend Metrics
+        if: steps.ping.outputs.status == 'success'
+        run: |
+          echo "Backend Metrics:"
+          response=$(curl -s ${{ secrets.RENDER_URL }}/health 2>/dev/null || \
+            curl -s https://algoclash-backend.onrender.com/health)
+
+          # Parse JSON using jq (pre-installed on ubuntu-latest)
+          echo "  Status: $(echo $response | jq -r '.status // "unknown"')"
+          echo "  Uptime: $(echo $response | jq -r '.uptime_hours // 0') hours"
+          echo "  Arena Running: $(echo $response | jq -r '.arena.running // false')"
+          echo "  Active Agents: $(echo $response | jq -r '.agents.active // 0')"
+          echo "  Total Trades: $(echo $response | jq -r '.agents.total_trades // 0')"
+          echo "  Total Cashed Out: $$(echo $response | jq -r '.agents.total_cashed_out // 0')"
+          echo "  Avg ROI: $(echo $response | jq -r '.agents.avg_roi // 0')%"
+          echo "  Database Connected: $(echo $response | jq -r '.database.connected // false')"
+
+      # Step 3: Handle failures gracefully
+      - name: Handle Ping Failure
+        if: steps.ping.outputs.status != 'success'
+        run: |
+          echo "Backend health check warning"
+          echo "This could mean:"
+          echo "  - Service is starting up (wait 2-3 minutes)"
+          echo "  - Service is cold starting after inactivity"
+          echo "  - Network issue (temporary, will retry in 14 min)"
+          echo ""
+          echo "The ping attempt itself should have woken the service."
+          # Don't fail the workflow, just log it
+          exit 0
+
+      # Step 4: Log completion
+      - name: Log Completion
+        run: |
+          echo "Keep-alive check complete at $(date -u)"
+          echo "Next ping in 14 minutes"

@@ -39,9 +39,9 @@ const AgentSelection = ({ onStart }) => {
         const model = e.target.value;
         if (!model) return;
         if (selectedModels.includes(model)) return;
-        if (selectedModels.length < 5) {
-            setSelectedModels(prev => [...prev, model]);
-        }
+        if (selectedModels.includes(model)) return;
+        // Limit removed per user request
+        setSelectedModels(prev => [...prev, model]);
         e.target.value = "";
     };
 
@@ -142,7 +142,7 @@ const AgentSelection = ({ onStart }) => {
 
     return (
         <div className="glass-panel" style={{ padding: '20px', maxWidth: '800px', margin: '40px auto', color: 'var(--text-primary)' }}>
-            <h2 style={{ borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>Select Agents (Max 5)</h2>
+            <h2 style={{ borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>Select Agents (Unlimited)</h2>
 
             {!isGenerating ? (
                 <>
@@ -155,7 +155,7 @@ const AgentSelection = ({ onStart }) => {
 
                     <div style={{ marginBottom: '20px' }}>
                         <label style={{ display: 'block', marginBottom: '5px', color: 'var(--text-secondary)' }}>Add Agent from Provider:</label>
-                        <select onChange={handleSelectChange} disabled={selectedModels.length >= 5}
+                        <select onChange={handleSelectChange}
                             style={{ width: '100%', padding: '10px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: '4px' }}
                             defaultValue="">
                             <option value="" disabled>Select a model...</option>
@@ -186,7 +186,7 @@ const AgentSelection = ({ onStart }) => {
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                            <span>Selected: {selectedModels.length} / 5</span>
+                            <span>Selected: {selectedModels.length}</span>
                             <button
                                 onClick={async () => {
                                     if (window.confirm('Are you sure you want to clear ALL data? This will delete all agents, trades, and chart history.')) {

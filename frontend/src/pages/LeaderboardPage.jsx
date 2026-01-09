@@ -57,6 +57,7 @@ const LeaderboardPage = () => {
                             <th style={{ padding: '15px', textAlign: 'right' }}>Equity ($)</th>
                             <th style={{ padding: '15px', textAlign: 'right' }}>ROI (%)</th>
                             <th style={{ padding: '15px', textAlign: 'right' }}>Cash ($)</th>
+                            <th style={{ padding: '15px', textAlign: 'right', color: '#00c853' }}>Profit ($)</th>
                             {/* <th style={{ padding: '15px', textAlign: 'right' }}>Sharpe</th> */}
                             <th style={{ padding: '15px', textAlign: 'right' }}>Total Fees ($)</th>
                             <th style={{ padding: '15px', textAlign: 'right' }}>BTC</th>
@@ -87,6 +88,9 @@ const LeaderboardPage = () => {
                                 </td>
                                 <td style={{ padding: '15px', textAlign: 'right', fontFamily: 'monospace' }}>
                                     ${agent.cash !== undefined ? agent.cash.toFixed(2) : '0.00'}
+                                </td>
+                                <td style={{ padding: '15px', textAlign: 'right', fontFamily: 'monospace', color: '#00c853', fontWeight: 'bold' }}>
+                                    ${agent.cashed_out !== undefined ? agent.cashed_out.toFixed(2) : '0.00'}
                                 </td>
                                 {/* Portfolio Columns */}
                                 <td style={{ padding: '15px', textAlign: 'right', fontFamily: 'monospace', color: '#ffab00' }}>

@@ -39,77 +39,96 @@ class Brain:
         if not market_stats:
             market_stats = "Market Offline (Simulated Environment)"
 
-        # 2. Construct Prompt - MULTI-CURRENCY TRADING SYSTEM
+        # 2. Construct Prompt - MULTI-CURRENCY TRADING SYSTEM (UPDATED WITH STATE PERSISTENCE)
         system_prompt = """
 You are a Senior HFT Quant Strategist specializing in Market Microstructure.
 Your goal is to build an INSTITUTIONAL-GRADE algo using DeepLOB, Stoikov, and NLP signals.
 
-## MARKET DATA ARCHITECTURE (AVAILABLE GLOBALS)
-The `market_data` dictionary passed to `execute_strategy` now contains predictive alpha signals:
+## MARKET DATA ARCHITECTURE
+The `market_data` dictionary passed to `execute_strategy` contains predictive alpha signals:
 
-market_data = {
+market_data[symbol] = {
     'price': 98000.0,
     'volume': 1500.0,
-    'history': [...],       # Standard close prices
-    
+    'history': [...],       # Standard close prices (list of floats)
+    'volumes': [...],       # Historical volumes (list of floats)
+
     # --- MICROSTRUCTURE ALPHA (Physics of the Order Book) ---
-    'obi_weighted': 0.45,   # Multi-Level Order Book Imbalance (DeepLOB). 
+    'obi_weighted': 0.45,   # Multi-Level Order Book Imbalance (DeepLOB).
                             # Range -1.0 to 1.0. High > 0.1 means Bid support.
-                            
+
     'micro_price': 98005.2, # Stoikov Fair Value.
                             # If micro_price > price: Market is undervalued.
-                            
+
     'ofi': 120.5,           # Order Flow Imbalance.
                             # Net aggressive buying volume vs selling volume.
 
     # --- ADVANCED MARKET INTERNALS (Institutional Grade) ---
-    'funding_rate_velocity': 0.01, 
-    'cvd_divergence': -0.5, 
+    'funding_rate_velocity': 0.01,
+    'cvd_divergence': -0.5,
     'taker_ratio': 1.1,
     'parkinson_vol': 0.02,
 
     # --- SEMANTIC & ATTENTION ALPHA ---
-    'sentiment': 0.85,      # FinBERT News Sentiment (-1.0 to 1.0).
-    'attention': 1.2,       # Google Trends Search Volume Delta. 
+    'sentiment': 0.85,      # News Sentiment (-1.0 to 1.0).
+    'attention': 1.2,       # Google Trends Search Volume Delta.
 }
+
+## AGENT STATE (PERSISTENT - USE THIS INSTEAD OF GLOBALS!)
+The `agent_state` dictionary is provided by the Arena and persists across module reloads:
+
+agent_state = {
+    'entry_prices': {'BTC': 50000.0, 'ETH': 3000.0},  # Your entry price for each position
+    'trade_history': [...],  # Last 20 trades
+    'custom': {},  # Store your own state variables here (persists!)
+    'current_pnl': {
+        'BTC': {
+            'pnl_percent': 0.35,   # Current profit/loss %
+            'pnl_usd': 123.45,     # Dollar P&L
+            'entry_price': 50000,  # Your entry
+            'current_price': 50175 # Current market price
+        }
+    }
+}
+
+CRITICAL: DO NOT use global variables like `_entry_price` - they RESET when the module reloads!
+ALWAYS use `agent_state['entry_prices']` and `agent_state['current_pnl']` instead.
 
 ## YOUR MISSION
 Create a strategy that fuses these signals using a "State-Based" logic:
-1. **Regime Filter**: Check `sentiment` and `attention`.
-2. **Setup Signal (Potential Energy)**: Use `obi_weighted`. Is there liquidity?
-3. **Trigger Signal (Kinetic Energy)**: Use `ofi`. Are buyers stepping in?
+1. **Focus on BTC, ETH, SOL ONLY** — These have best liquidity and signal quality.
+2. **Volume Spike Filter**: Only enter when volume > 1.5x rolling average.
+3. **Trailing Stop**: Track peak price and exit if price drops 2% from peak.
 4. **Fair Value Gap**: Calculate `(micro_price - price)`. Trade towards Micro-price.
+5. **SHORT SELLING**: If signals are negative (e.g., negative Sentiment + negative OBI), SELL to open a short.
 
 ## ===== CRITICAL TRADING RULES (MUST FOLLOW) =====
 
-### 1. POSITION SIZING (5% Risk Per Trade)
-- NEVER risk more than 5% of cash on a single trade.
-- Formula: `qty = (cash_balance * 0.05) / price`
-- This prevents catastrophic losses.
+### 1. FOCUS ON TOP 3 COINS ONLY
+- ONLY trade BTC, ETH, SOL. Ignore all other symbols.
+- `symbols = ['BTC', 'ETH', 'SOL']`
 
-### 2. STOP-LOSS (-5% to -8%)
-- Only exit when position is down -5% or more.
-- Crypto is volatile. A -3% stop gets triggered by noise.
-- Use: `if pnl_pct < -0.05: SELL`
+### 2. POSITION SIZING (20% Risk Per Trade)
+- Risk up to 20% of CASH on a single trade.
+- Use FLOAT quantity: `qty = (cash_balance * 0.20) / price`
+- DO NOT use int() or floor(). Fractional quantities like 0.0023 are valid.
 
-### 3. PROFIT TARGET (+3% to +5%)
-- Take profits when up +3% to +5%.
-- Do NOT be greedy. Secure the bag.
-- Use: `if pnl_pct > 0.03: SELL`
+### 3. MINIMUM PROFIT TARGET (Fees Coverage)
+- Trading fees are ~0.075% per side (0.15% round trip).
+- Slippage is ~0.025% per side (0.05% round trip).
+- Total cost: ~0.20% per round trip.
+- **You MUST NOT take profit until PnL > 0.50% (0.005).**
+- `if pnl_pct > 0.005: SELL` (Secure profit after costs)
 
-### 4. TRADE COOLDOWN (60 Ticks ~ 60 Seconds)
-- After ANY trade (buy or sell), wait 60 ticks before next trade.
-- Prevents overtrading and fee erosion.
-- Track: `_last_trade_tick` global variable.
+### 4. ENTRY LOGIC (Long & Short)
+- Long Entry: Score >= 2
+- Short Entry: Score <= -2 (SELL to Open)
+- **Cooldown**: Wait 60 ticks after any trade.
 
-### 5. ENTRY THRESHOLD (Score >= 5)
-- Lower your entry threshold to score >= 5 (not 10 or 15).
-- This allows entries when signals are moderately aligned.
-
-## TRADING CONSTRAINTS
-- Starting capital: $10,000
-- Trading fees: 0.1% per trade
-- **HURDLE RATE**: You must beat the 0.2% round-trip fee.
+### 5. STOP-LOSS (-0.30%)
+- Tight stop: -0.30% from entry (to limit losses).
+- Use: `if agent_state['current_pnl'].get(sym, {}).get('pnl_percent', 0) < -0.30:`
+- Emergency Arena stop at -2% exists as backup.
 
 ## EXACT CODE TEMPLATE (USE THIS):
 ```python
@@ -117,135 +136,94 @@ Create a strategy that fuses these signals using a "State-Based" logic:
 import numpy as np
 import pandas as pd
 
-# Global state
-_entry_price = {}
-_entry_tick = {}
-_last_trade_tick = 0  # COOLDOWN TRACKER
+# Use agent_state for persistence - NO global variables!
+_last_trade_tick = 0  # Only this is safe as a global (just a counter)
 
-def calculate_ema(prices, period):
-    if not prices or len(prices) < period: return None
-    clean_prices = [p for p in prices if isinstance(p, (int, float))]
-    if len(clean_prices) < period: return None
-    multiplier = 2 / (period + 1)
-    ema = sum(clean_prices[:period]) / period
-    for p in clean_prices[period:]:
-        ema = (p - ema) * multiplier + ema
-    return ema
+def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None):
+    '''
+    Institutional-grade algo with State Persistence and Fee Awareness.
+    agent_state provides entry_prices and current_pnl - USE THESE!
+    '''
+    global _last_trade_tick
 
-def execute_strategy(market_data, tick, cash_balance, portfolio):
-    '''
-    Institutional-grade algo with proper risk management.
-    '''
-    global _entry_price, _last_trade_tick
-    
-    # ===== COOLDOWN CHECK =====
-    # Wait 60 ticks (~ 60 seconds) between trades
+    # Handle backward compatibility
+    if agent_state is None:
+        agent_state = {'entry_prices': {}, 'current_pnl': {}, 'custom': {}}
+
+    symbols = ['BTC', 'ETH', 'SOL']
+
+    # Cooldown
     if tick - _last_trade_tick < 60:
         return ("HOLD", None, 0)
-    
-    # 0. Hot-Swap Reconstruction
-    for sym, qty in portfolio.items():
-        if qty != 0 and sym not in _entry_price:
-            current_p = market_data.get(sym, {}).get('price', 0)
-            if current_p: _entry_price[sym] = current_p
 
-    # ===== EXIT LOGIC (Check Existing Positions First) =====
-    for sym, qty in portfolio.items():
+    # 1. EXIT LOGIC - Use agent_state['current_pnl'] for reliable PnL tracking
+    for sym in symbols:
+        qty = portfolio.get(sym, 0)
         if qty == 0: continue
-        data = market_data.get(sym, {})
-        if not data or 'price' not in data: continue
-        
-        price = data['price']
-        entry = _entry_price.get(sym, price)
-        if entry == 0: continue
-        
-        pnl_pct = (price / entry) - 1.0
-        
-        # PROFIT TARGET: +3% to +5%
-        if pnl_pct > 0.03:
-            _entry_price.pop(sym, None)
-            _last_trade_tick = tick  # COOLDOWN
-            return ("SELL", sym, qty)
-        
-        # STOP-LOSS: -5%
-        if pnl_pct < -0.05:
-            _entry_price.pop(sym, None)
-            _last_trade_tick = tick  # COOLDOWN
-            return ("SELL", sym, qty)
-    
-    # ===== ENTRY LOGIC =====
-    if not market_data: return ("HOLD", None, 0)
-    
+
+        pnl_info = agent_state.get('current_pnl', {}).get(sym, {})
+        pnl_pct = pnl_info.get('pnl_percent', 0) / 100.0  # Convert from % to decimal
+
+        # TAKE PROFIT (0.50% target to beat 0.20% costs)
+        if pnl_pct > 0.005:
+            _last_trade_tick = tick
+            action = "SELL" if qty > 0 else "BUY"
+            return (action, sym, abs(qty))
+
+        # STOP LOSS (-0.30%)
+        if pnl_pct < -0.003:
+            _last_trade_tick = tick
+            action = "SELL" if qty > 0 else "BUY"
+            return (action, sym, abs(qty))
+
+    # 2. ENTRY LOGIC - Find best opportunity
     best_sym = None
-    best_score = -999
-    
-    for sym, data in market_data.items():
-        if not isinstance(data, dict) or 'price' not in data: continue
-        
-        # Skip if already holding
-        if portfolio.get(sym, 0) != 0: continue
-        
-        price = data['price']
-        
-        # Extract Signals
-        obi = data.get('obi_weighted', 0.0)
-        ofi = data.get('ofi', 0.0)
-        micro_price = data.get('micro_price', price)
-        sentiment = data.get('sentiment', 0.0)
-        
-        # Calculate Score
+    best_score = 0
+
+    for sym in symbols:
+        if portfolio.get(sym, 0) != 0: continue  # Already in position
+
+        data = market_data.get(sym, {})
+        if not data: continue
+
+        obi = data.get('obi_weighted', 0)
+        ofi = data.get('ofi', 0)
+        sentiment = data.get('sentiment', 0)
+
         score = 0
-        
-        # Order Book Imbalance (Lowered threshold)
-        if obi > 0.1:
-            score += 5
-        
-        # Order Flow Imbalance
-        if ofi > 30:
-            score += 4
-        elif ofi < -30:
-            score -= 3
-        
-        # Fair Value Gap (Micro-price deviation)
-        if price < micro_price * 0.995:  # Price below fair value
-            score += 3
-        
-        # Sentiment
-        if sentiment > 0.6:
-            score += 2
-        elif sentiment < 0.3:
-            score -= 2
-        
-        if score > best_score:
+        if obi > 0.1: score += 1
+        if obi < -0.1: score -= 1
+        if ofi > 10: score += 1
+        if ofi < -10: score -= 1
+        if sentiment > 0.2: score += 1
+        if sentiment < -0.2: score -= 1
+
+        if abs(score) > abs(best_score):
             best_score = score
             best_sym = sym
-    
-    # ===== EXECUTION (Score >= 5) =====
-    if best_sym and best_score >= 5:
-        data = market_data[best_sym]
-        price = data['price']
-        
-        # POSITION SIZING: Risk only 5% of cash
-        qty = (cash_balance * 0.05) / price
-        
-        # Ensure minimum viable qty
-        if qty > 0 and cash_balance >= price * qty:
-            _entry_price[best_sym] = price
-            _last_trade_tick = tick  # COOLDOWN
+
+    if best_sym and abs(best_score) >= 2:
+        price = market_data[best_sym]['price']
+        qty = (cash_balance * 0.20) / price
+
+        _last_trade_tick = tick
+
+        if best_score > 0:
             return ("BUY", best_sym, qty)
-    
+        else:
+            return ("SELL", best_sym, qty)  # Short Sell
+
     return ("HOLD", None, 0)
 ```
 
 ## MANDATORY RULES:
-1. Function named `execute_strategy`.
-2. 4 Arguments: `(market_data, tick, cash_balance, portfolio)`.
-3. Returns `(ACTION, SYMBOL, QUANTITY)`.
-4. MUST use `obi_weighted`, `micro_price`, `ofi` in logic.
-5. NO markdown fences in output, just code.
-6. MUST implement 5% position sizing.
-7. MUST implement -5% stop loss and +3% profit target.
-8. MUST implement 60-tick cooldown.
+1. `execute_strategy` must accept `(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None)`.
+2. Return `(ACTION, SYMBOL, QUANTITY)`.
+3. `ACTION` must be "BUY", "SELL", or "HOLD".
+4. **USE `agent_state['current_pnl']` for PnL tracking - NOT global variables!**
+5. **PROFIT TARGET > 0.50% is NON-NEGOTIABLE (to beat 0.20% costs).**
+6. Use `obi_weighted` and `ofi` for signals.
+7. Support **SHORT SELLING** (Return "SELL" when you have 0 quantity to open short).
 """
 
         user_prompt = f"Generate a multi-currency strategy for {name}. Focus on finding the best momentum asset among BTC, ETH, SOL."
@@ -263,11 +241,7 @@ def execute_strategy(market_data, tick, cash_balance, portfolio):
                 return {"error": "No OpenRouter API Key set"}
 
         # 3. Call LLM with Fallback
-        models_to_try = [
-            model, 
-            "openai/gpt-oss-20b:free",
-            "nvidia/nemotron-nano-9b-v2:free"
-        ]
+        models_to_try = [model] # No fallback as per user request
         valid_code = None
         
         for current_model in models_to_try:
@@ -362,19 +336,21 @@ def execute_strategy(market_data, tick, cash_balance, portfolio):
                 for alias in node.names:
                     if alias.name in ['os', 'sys', 'subprocess', 'requests']:
                         return False
-        
+
         has_strategy = False
         for node in tree.body:
             if isinstance(node, ast.FunctionDef) and node.name == 'execute_strategy':
                 has_strategy = True
-                if len(node.args.args) != 4:
-                    print(f"Validation: execute_strategy needs 4 args, found {len(node.args.args)}")
+                # Allow 4-6 args: (market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None)
+                num_args = len(node.args.args)
+                if num_args < 4 or num_args > 6:
+                    print(f"Validation: execute_strategy needs 4-6 args, found {num_args}")
                     return False
-        
+
         if not has_strategy:
             print("Validation: Missing execute_strategy function")
             return False
-            
+
         return True
 
     def evaluate_agent(self, code, roi, portfolio, logs):
@@ -490,22 +466,31 @@ You are an elite crypto hedge fund algo developer. You are FIXING and IMPROVING 
 ## CRITIQUE OF OLD STRATEGY
 {critique}
 
-## MARKET DATA ARCHITECTURE (AVAILABLE GLOBALS)
-market_data = {{
+## MARKET DATA ARCHITECTURE
+market_data[symbol] = {{
     'price': 98000.0,
     'volume': 1500.0,
-    # --- DEEP HFT SIGNALS ---
     'obi_weighted': 0.45,   # Multi-Level Order Book Imbalance (DeepLOB). >0.3 is Strong Support.
     'micro_price': 98005.2, # Stoikov Fair Value.
     'ofi': 150.0,           # Order Flow Imbalance. Leading indicator of immediate pressure.
     'sentiment': 0.85,      # Global News Sentiment.
 }}
 
+## AGENT STATE (PERSISTENT - USE THIS!)
+agent_state = {{
+    'entry_prices': {{'BTC': 50000.0}},  # Your entry prices (persists across reloads!)
+    'current_pnl': {{
+        'BTC': {{'pnl_percent': 0.35, 'entry_price': 50000, 'current_price': 50175}}
+    }}
+}}
+
+CRITICAL: Use `agent_state['current_pnl']` for PnL - NOT global variables!
+
 ## YOUR MISSION
-Rewrite the `execute_strategy` function to address the critique and IMPROVE performance using these signals.
-- Keep the exact same function signature.
-- Keep the same keys in `_entry_price`.
-- IMPLEMENT HANDLING FOR EXISTING POSITIONS.
+Rewrite the `execute_strategy` function to address the critique and IMPROVE performance.
+- Use agent_state for state persistence (NO global _entry_price!)
+- Profit target: 0.50% (to beat 0.20% transaction costs)
+- Stop-loss: -0.30%
 
 ## EXACT CODE TEMPLATE (USE THIS):
 ```python
@@ -513,57 +498,50 @@ Rewrite the `execute_strategy` function to address the critique and IMPROVE perf
 import numpy as np
 import pandas as pd
 
-# Global state
-_entry_price = {{}}
-_entry_tick = {{}}
+_last_trade_tick = 0  # Only counters are safe as globals
 
-def execute_strategy(market_data, tick, cash_balance, portfolio):
+def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None):
     '''
-    See MARKET DATA ARCHITECTURE above.
+    Use agent_state for persistent state - NOT globals!
     '''
-    global _entry_price
-    
-    # 0. Hot-Swap Reconstruction
-    for sym, qty in portfolio.items():
-        if qty!= 0 and sym not in _entry_price:
-             _entry_price[sym] = market_data.get(sym, {{}}).get('price', 0)
+    global _last_trade_tick
 
-    best_opp = None
-    best_score = -999
-    
-    if not market_data: return ("HOLD", None, 0)
-    
-    # scan for best asset
-    for sym, data in market_data.items():
-        if not data or 'price' not in data: continue
-        
-        price = data['price']
-        
-        # Signals
-        obi = data.get('obi_weighted', 0.0)
-        ofi = data.get('ofi', 0.0)
-        micro_price = data.get('micro_price', price)
-        sentiment = data.get('sentiment', 0.0)
-        
-        #... IMPROVED LOGIC BASED ON CRITIQUE...
-        
-        # Example HFT signal usage:
-        # if ofi > 50 and obi > 0.3: score += 10
-        
-        #...
-            
-    # EXECUTION LOGIC...
-    # Return ("ACTION", "SYMBOL", QTY)
+    if agent_state is None:
+        agent_state = {{'entry_prices': {{}}, 'current_pnl': {{}}}}
+
+    symbols = ['BTC', 'ETH', 'SOL']
+
+    # Cooldown
+    if tick - _last_trade_tick < 60:
+        return ("HOLD", None, 0)
+
+    # EXIT LOGIC - Use agent_state['current_pnl']
+    for sym in symbols:
+        qty = portfolio.get(sym, 0)
+        if qty == 0: continue
+
+        pnl_info = agent_state.get('current_pnl', {{}}).get(sym, {{}})
+        pnl_pct = pnl_info.get('pnl_percent', 0) / 100.0
+
+        if pnl_pct > 0.005:  # Take profit at 0.50%
+            _last_trade_tick = tick
+            return ("SELL" if qty > 0 else "BUY", sym, abs(qty))
+
+        if pnl_pct < -0.003:  # Stop loss at -0.30%
+            _last_trade_tick = tick
+            return ("SELL" if qty > 0 else "BUY", sym, abs(qty))
+
+    # ENTRY LOGIC - Your improved signals here
+    # ...
 
     return ("HOLD", None, 0)
 ```
 
 ## MANDATORY RULES:
-1. Function named `execute_strategy`.
-2. 4 Arguments: `(market_data, tick, cash_balance, portfolio)`.
-3. Returns `(ACTION, SYMBOL, QUANTITY)`.
-4. Use `obi_weighted`, `micro_price`, `ofi` keys.
-5. NO markdown fences in output, just code.
+1. Function signature: `execute_strategy(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None)`.
+2. Returns `(ACTION, SYMBOL, QUANTITY)`.
+3. USE `agent_state['current_pnl']` - NOT global variables!
+4. Profit target > 0.50%, Stop loss at -0.30%.
 """
         
         user_prompt = f"Refactor {name} to fix: {critique}. Improve profitability."
