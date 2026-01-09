@@ -87,7 +87,21 @@ from market_simulation.arena import Arena
 default_agents = [
     "Agent_10_github_openai_gpt_5",
     "Agent_11_github_openai_gpt_4o",
-    "Agent_7_github_openai_gpt_5_"
+    "Agent_7_github_openai_gpt_5_",
+    "Agent_qwen_3_max",
+    "Agent_claude_opus_4_5",
+    "Agent_claude_sonnet_4_5",
+    "Agent_deepseek",
+    "Agent_gemini_3_flash_quick",
+    "Agent_gemini_3_flash_thinking",
+    "Agent_gemini_3_pro",
+    "Agent_glm_4_7",
+    "Agent_grok_4_thinking",
+    "Agent_kat_coder_pilot",
+    "Agent_nvidia_nemotron",
+    "Agent_open_ai_4o",
+    "Agent_open_ai_5_2_thinking",
+    "Agent_xiomi_mimo"
 ]
 
 # Global State
