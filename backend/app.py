@@ -169,6 +169,34 @@ def get_status():
         'active_agents': list(arena.agents.keys())
     })
 
+@app.route('/leaderboard', methods=['GET'])
+def get_leaderboard():
+    """Returns a sorted leaderboard of all agents"""
+    agents_list = []
+    try:
+        for name, agent in arena.agents.items():
+            agents_list.append({
+                'name': name,
+                'equity': agent.get('equity', 100.0),
+                'roi': agent.get('roi', 0.0),
+                'cash': agent.get('cash', 100.0),
+                'cashed_out': agent.get('cashed_out', 0.0),
+                'total_fees': agent.get('total_fees', 0.0),
+                'portfolio': agent.get('portfolio', {}),
+                'last_decision': agent.get('last_decision', 'WAIT')
+            })
+        
+        # Sort by ROI descending
+        agents_list.sort(key=lambda x: x['roi'], reverse=True)
+        
+        return jsonify({
+            'timestamp': datetime.utcnow().isoformat(),
+            'count': len(agents_list),
+            'leaderboard': agents_list
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """
