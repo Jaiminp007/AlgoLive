@@ -13,11 +13,12 @@ class DataFeed:
     def __init__(self):
         # --- HYBRID CONFIGURATION ---
         self.stock_symbols = []
-        self.crypto_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-        
+        # Using Coinbase (USD pairs instead of USDT)
+        self.crypto_symbols = ["BTC/USD", "ETH/USD", "SOL/USD"]
+
         # Combined Symbols for Arena
         self.crypto_map = {
-            "BTC/USDT": "BTC", "ETH/USDT": "ETH", "SOL/USDT": "SOL"
+            "BTC/USD": "BTC", "ETH/USD": "ETH", "SOL/USD": "SOL"
         }
         
         # Special Synthetic Assets
@@ -40,15 +41,16 @@ class DataFeed:
         self.current_sim_prices = {}
         self.last_update_times = {}
         
-        # --- INIT BINANCE (CRYPTO) ---
-        print(f"DataFeed: Initializing Crypto: {self.crypto_symbols}")
-        self.exchange = ccxt.binance({
+        # --- INIT COINBASE (CRYPTO) ---
+        # Switched from Binance to Coinbase for better global accessibility
+        print(f"DataFeed: Initializing Crypto via Coinbase: {self.crypto_symbols}")
+        self.exchange = ccxt.coinbase({
             'enableRateLimit': True,
         })
 
     def get_market_snapshot(self):
         """
-        Fetches comprehensive market data from both Yahoo (Stocks) and Binance (Crypto).
+        Fetches comprehensive market data from both Yahoo (Stocks) and Coinbase (Crypto).
         """
         snapshot = {}
         timestamp = int(datetime.now().timestamp() * 1000)
@@ -143,7 +145,7 @@ class DataFeed:
         except Exception as e:
             print(f"Stock Fetch Error: {e}")
 
-        # --- FETCH CRYPTO (BINANCE) ---
+        # --- FETCH CRYPTO (COINBASE) ---
         try:
             # Only fetch the tickers we care about
             tickers = self.exchange.fetch_tickers(self.crypto_symbols)
@@ -258,7 +260,7 @@ class DataFeed:
         except Exception as e:
             print(f"yfinance History Error: {e}")
             
-        # --- CRYPTO HISTORY (BINANCE) ---
+        # --- CRYPTO HISTORY (COINBASE) ---
         try:
             tf = '1m' # CCXT default
             for pair in self.crypto_symbols:
