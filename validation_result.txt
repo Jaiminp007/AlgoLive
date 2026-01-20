@@ -1,0 +1,7 @@
+Testing Bad Code...
+Result: {'valid': False, 'error': "unsupported operand type(s) for *: 'NoneType' and 'int'"}
+✅ Correctly detected NoneType error!
+------------------------------
+Testing Good Code...
+Result: {'valid': True, 'error': None}
+✅ Correctly validated safe code!

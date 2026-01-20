@@ -59,7 +59,7 @@ class AttentionFeed:
         - 2.0+: High attention / viral
         """
         if symbols is None:
-            symbols = ['BTC', 'ETH', 'SOL']
+            symbols = ['BTC', 'ETH', 'SOL', 'BNB']
         
         current_time = time.time()
         

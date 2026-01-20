@@ -1,6 +1,7 @@
 """
 AlgoClash Cortex - News Feed
-Fetches live crypto news from CryptoPanic API with caching and sentiment scoring.
+Fetches news from FinancialDatasets.ai (stocks) and CryptoPanic (crypto).
+Priority: FinancialDatasets.ai (PRIMARY) -> CryptoPanic (FALLBACK for crypto)
 """
 
 import os
@@ -12,36 +13,55 @@ from datetime import datetime
 
 class NewsFeed:
     """
-    Fetches live crypto news from CryptoPanic API.
+    Hybrid news feed supporting both stocks and crypto.
     Features:
+    - FinancialDatasets.ai for stocks (with pre-calculated sentiment)
+    - CryptoPanic for crypto news
     - Rate-limited caching (5-minute TTL)
-    - Graceful degradation (mock news if API fails)
-    - Integration with FinBERT sentiment scoring
+    - Graceful degradation (mock news if APIs fail)
     """
-    
+
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv('CRYPTOPANIC_API_KEY')
-        self.base_url = "https://cryptopanic.com/api/developer/v2/posts/"
-        
+        # CryptoPanic for crypto
+        self.crypto_api_key = api_key or os.getenv('CRYPTOPANIC_API_KEY')
+        self.crypto_base_url = "https://cryptopanic.com/api/developer/v2/posts/"
+
+        # FinancialDatasets.ai for stocks
+        self.fd_api_key = os.getenv('FINANCIAL_DATASETS_API_KEY')
+        self.fd_base_url = "https://api.financialdatasets.ai"
+
         # Cache settings
         self.cache: List[Dict] = []
         self.cache_time: float = 0
         self.cache_ttl: int = 300  # 5 minutes
-        
+
+        # Stock-specific cache
+        self.stock_news_cache: Dict[str, List[Dict]] = {}
+        self.stock_cache_time: Dict[str, float] = {}
+
         # Breaking news detection
         self.breaking_keywords = [
             'crash', 'hack', 'exploit', 'sec', 'regulation', 'ban',
-            'etf', 'approval', 'halving', 'surge', 'plunge', 'emergency'
+            'etf', 'approval', 'halving', 'surge', 'plunge', 'emergency',
+            'lawsuit', 'fraud', 'bankruptcy', 'layoffs', 'recall'
         ]
-        
+
+        # Crypto symbols (for filtering)
+        self.crypto_symbols = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'ADA']
+
+        # Stock symbols
+        self.stock_symbols = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META']
+
         # Mock news fallback
         self.mock_news = [
             {"title": "Bitcoin holds steady above $97,000 as market consolidates", "source": "CoinDesk", "sentiment": "neutral"},
             {"title": "Institutional demand continues as ETF inflows remain strong", "source": "Bloomberg", "sentiment": "bullish"},
             {"title": "Ethereum developers announce next upgrade timeline", "source": "Decrypt", "sentiment": "neutral"},
-            {"title": "Federal Reserve signals steady policy, crypto markets stable", "source": "Reuters", "sentiment": "neutral"},
-            {"title": "Major exchange reports record trading volume this quarter", "source": "CryptoNews", "sentiment": "bullish"},
+            {"title": "Federal Reserve signals steady policy, markets stable", "source": "Reuters", "sentiment": "neutral"},
+            {"title": "Tech stocks rally on strong earnings reports", "source": "CNBC", "sentiment": "bullish"},
         ]
+
+        print(f"NewsFeed: Initialized (FD: {'active' if self.fd_api_key else 'inactive'}, CryptoPanic: {'active' if self.crypto_api_key else 'inactive'})")
     
     def get_latest_news(self, currencies: List[str] = ["BTC", "ETH"], limit: int = 10) -> List[Dict]:
         """
@@ -125,12 +145,12 @@ class NewsFeed:
             "public": "true",
         }
         
-        if self.api_key:
-            params["auth_token"] = self.api_key
+        if self.crypto_api_key:
+            params["auth_token"] = self.crypto_api_key
         
         try:
             response = requests.get(
-                self.base_url,
+                self.crypto_base_url,
                 params=params,
                 timeout=10,
                 headers={"User-Agent": "AlgoClash/1.0"}
@@ -180,7 +200,132 @@ class NewsFeed:
         except requests.exceptions.RequestException as e:
             print(f"NewsFeed: Request error: {e}")
             return []
-    
+
+    def get_stock_news(self, ticker: str, limit: int = 10) -> List[Dict]:
+        """
+        Fetches stock news from FinancialDatasets.ai (PRIMARY).
+        Has pre-calculated sentiment scores.
+
+        Args:
+            ticker: Stock symbol (e.g., 'AAPL', 'TSLA')
+            limit: Maximum number of articles
+
+        Returns:
+            List of news items with title, source, sentiment
+        """
+        # Check cache
+        if ticker in self.stock_news_cache:
+            cache_age = time.time() - self.stock_cache_time.get(ticker, 0)
+            if cache_age < self.cache_ttl:
+                return self.stock_news_cache[ticker][:limit]
+
+        if not self.fd_api_key:
+            return []
+
+        try:
+            response = requests.get(
+                f"{self.fd_base_url}/news",
+                params={'ticker': ticker, 'limit': min(limit, 100)},
+                headers={'X-API-KEY': self.fd_api_key},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                news_items = data.get('news', [])
+
+                news = []
+                for item in news_items:
+                    # FinancialDatasets.ai provides pre-calculated sentiment
+                    sentiment = item.get('sentiment', 'neutral')
+
+                    # Normalize sentiment to our format
+                    if isinstance(sentiment, str):
+                        sentiment_map = {
+                            'positive': 'bullish',
+                            'negative': 'bearish',
+                            'neutral': 'neutral'
+                        }
+                        sentiment = sentiment_map.get(sentiment.lower(), 'neutral')
+
+                    news.append({
+                        'title': item.get('title', ''),
+                        'source': item.get('source', 'FinancialDatasets'),
+                        'url': item.get('url', ''),
+                        'published_at': item.get('date', ''),
+                        'sentiment': sentiment,
+                        'ticker': ticker,
+                        'data_source': 'financial_datasets'
+                    })
+
+                # Update cache
+                self.stock_news_cache[ticker] = news
+                self.stock_cache_time[ticker] = time.time()
+                return news[:limit]
+
+            elif response.status_code == 429:
+                print(f"NewsFeed: FD rate limited for {ticker}")
+            else:
+                print(f"NewsFeed: FD returned {response.status_code} for {ticker}")
+
+        except requests.exceptions.Timeout:
+            print(f"NewsFeed: FD timeout for {ticker}")
+        except requests.exceptions.RequestException as e:
+            print(f"NewsFeed: FD error for {ticker}: {e}")
+
+        return self.stock_news_cache.get(ticker, [])[:limit]
+
+    def get_all_news(self, symbols: List[str] = None, limit: int = 10) -> List[Dict]:
+        """
+        Fetches news for all specified symbols (crypto + stocks).
+
+        Args:
+            symbols: List of symbols. If None, uses all configured symbols.
+            limit: Max news items per symbol
+
+        Returns:
+            Combined list of news items sorted by date
+        """
+        if symbols is None:
+            symbols = self.crypto_symbols[:3] + self.stock_symbols[:3]
+
+        all_news = []
+
+        # Separate crypto and stock symbols
+        crypto_syms = [s for s in symbols if s in self.crypto_symbols]
+        stock_syms = [s for s in symbols if s in self.stock_symbols]
+
+        # Fetch crypto news (CryptoPanic)
+        if crypto_syms:
+            crypto_news = self.get_latest_news(currencies=crypto_syms, limit=limit)
+            all_news.extend(crypto_news)
+
+        # Fetch stock news (FinancialDatasets.ai)
+        for ticker in stock_syms:
+            stock_news = self.get_stock_news(ticker, limit=limit // len(stock_syms) if stock_syms else limit)
+            all_news.extend(stock_news)
+
+        return all_news
+
+    def get_stock_sentiment(self, ticker: str, limit: int = 10) -> float:
+        """
+        Get aggregated sentiment score for a stock from recent news.
+
+        Returns:
+            Float between -1.0 (bearish) and 1.0 (bullish)
+        """
+        news = self.get_stock_news(ticker, limit)
+        if not news:
+            return 0.0
+
+        sentiment_scores = []
+        for article in news:
+            sentiment = article.get('sentiment', 'neutral')
+            score_map = {'bullish': 1.0, 'bearish': -1.0, 'neutral': 0.0}
+            sentiment_scores.append(score_map.get(sentiment, 0.0))
+
+        return sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0
+
     def _calculate_aggregate_sentiment(
         self, 
         news: List[Dict], 

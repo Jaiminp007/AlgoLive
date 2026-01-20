@@ -21,6 +21,7 @@ AlgoLive/
 │       └── Agent_*.py         # Individual agent strategies
 ├── analyst_engine/             # LLM-powered Agent Generation
 │   ├── brain.py               # Code generation via OpenRouter/GitHub AI
+│   ├── sandbox_agent.py       # Sandbox research agent with E2B integration
 │   ├── analyst.py             # Market state computation
 │   ├── news_feed.py           # News aggregation
 │   └── ai_agents.json         # Available LLM models configuration
@@ -65,11 +66,39 @@ The central trading engine that:
 
 ### 2. Data Feed (`market_simulation/data_feed.py`)
 
-Hybrid data provider:
-- **Crypto**: Binance via CCXT (`get_market_snapshot()`)
+Hybrid data provider with priority fallback:
+
+**Primary Source: FinancialDatasets.ai**
+- Stocks: Real-time prices, news with sentiment, insider trades, institutional ownership
+- Requires `FINANCIAL_DATASETS_API_KEY` environment variable
+
+**Fallback Sources:**
+- **Crypto**: Coinbase via CCXT (`get_market_snapshot()`)
 - **Stocks**: Yahoo Finance via yfinance
 
-**Symbols**: BTC, ETH, SOL (crypto only by default)
+**Symbols:**
+- Crypto: BTC, ETH, SOL
+- Stocks: AAPL, TSLA, NVDA, MSFT, GOOGL, AMZN, META
+
+### 2.1 FinancialDatasets.ai Provider (`market_simulation/financial_datasets_provider.py`)
+
+Premium data provider for institutional-grade fundamental data:
+- `get_price_snapshot(ticker)` - Real-time stock prices
+- `get_news(ticker, limit)` - News with pre-calculated sentiment
+- `get_insider_trades(ticker)` - Insider buy/sell activity
+- `get_institutional_ownership(ticker)` - 13F holdings data
+- `get_financial_statements(ticker, type, period)` - Income, balance, cash flow
+- `calculate_insider_sentiment(ticker)` - Net insider buying ratio
+- `calculate_institutional_change(ticker)` - QoQ ownership change
+
+**Caching Strategy:**
+| Data Type | Cache TTL |
+|-----------|-----------|
+| Price Snapshot | 1 second |
+| News | 5 minutes |
+| Insider Trades | 1 hour |
+| Institutional | 1 hour |
+| Financials | 24 hours |
 
 ### 3. Brain (`analyst_engine/brain.py`)
 
@@ -110,6 +139,8 @@ Global variables like `_entry_price` RESET when the module reloads.
 ### 5. Available Market Signals
 
 From `market_data[symbol]`:
+
+**Microstructure Signals (All Assets):**
 | Signal | Description | Range |
 |--------|-------------|-------|
 | `price` | Current price | float |
@@ -125,6 +156,27 @@ From `market_data[symbol]`:
 | `taker_ratio` | Buy/sell taker ratio | float |
 | `funding_rate_velocity` | Funding rate change | float |
 
+**Fundamental Signals (Stocks Only - from FinancialDatasets.ai):**
+| Signal | Description | Range |
+|--------|-------------|-------|
+| `insider_sentiment` | Net insider buying ratio | -1.0 to 1.0 |
+| `institutional_change` | QoQ institutional ownership change | % |
+| `revenue_growth` | Year-over-year revenue growth | % |
+| `profit_margin` | Current profit margin | 0 to 1 |
+| `pe_ratio` | Price-to-Earnings ratio | float |
+| `earnings_surprise` | Latest earnings vs estimate | % |
+| `news_sentiment_score` | Pre-calculated news sentiment | -1.0 to 1.0 |
+| `data_source` | Data source used | 'financial_datasets' or 'fallback' |
+
+**Usage Example:**
+```python
+# Check if fundamental data is available (stocks only)
+insider = data.get('insider_sentiment')
+if insider is not None:
+    if insider > 0.5: score += 1  # Heavy insider buying
+    if insider < -0.5: score -= 1  # Heavy insider selling
+```
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -139,6 +191,18 @@ From `market_data[symbol]`:
 | `/soft_reset_arena` | POST | Reset equity but keep agents |
 | `/rebuild_algos` | POST | Trigger manual evolution |
 | `/available_models` | GET | List available LLM models |
+
+### Sandbox Research Agent Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sandbox/create` | POST | Create new sandbox research session |
+| `/sandbox/message` | POST | Send message to agent, get response + code execution |
+| `/sandbox/execute` | POST | Manually execute Python code in sandbox |
+| `/sandbox/finalize` | POST | Extract final strategy and save to agents directory |
+| `/sandbox/status/<id>` | GET | Get session status and metadata |
+| `/sandbox/history/<id>` | GET | Get full message and execution history |
+| `/sandbox/close` | POST | Close session and cleanup sandbox |
 
 ## Socket.IO Events
 
@@ -203,6 +267,7 @@ From `market_data[symbol]`:
 | `MONGO_URI` | MongoDB connection string | None (no persistence) |
 | `OPENROUTER_API_KEY` | OpenRouter API key | Required for agent generation |
 | `GITHUB_TOKEN` | GitHub AI inference token | Optional |
+| `FINANCIAL_DATASETS_API_KEY` | FinancialDatasets.ai API key | Optional (enables fundamental data) |
 | `ASSET_CLASS` | "STOCK" or "CRYPTO" | CRYPTO |
 | `ENABLE_SEMANTIC_ALPHA` | Enable sentiment analysis | true |
 | `RENDER_EXTERNAL_URL` | Self-ping URL for Render | None |
@@ -266,3 +331,59 @@ When implementing fixes:
 2. **brain.py** - Agent generation prompts and validation
 3. **data_feed.py** - Market data fetching
 4. **supervisor.py** - Agent monitoring and evolution triggers
+5. **sandbox_agent.py** - Sandbox research agent and E2B integration
+
+## Sandbox Research Agent
+
+The Sandbox Research Agent is a multi-turn chat system where an LLM agent can explore financial data, execute Python code in an E2B cloud sandbox, and create trading strategies.
+
+### How It Works
+
+1. **User selects an AI model** and starts a research session
+2. **Agent explores data** using the FinancialDatasets.ai API
+3. **Python code is executed** in a secure E2B sandbox
+4. **Results are fed back** to the LLM for iterative refinement
+5. **Final strategy is extracted** when `execute_strategy` function is detected
+6. **Strategy is deployed** to the arena
+
+### Architecture
+
+```
+Frontend (SandboxResearchPage)
+    │
+    ├── Model Selector & Session Controls
+    └── Chat Interface (messages, code blocks, execution results)
+           │
+           ▼ REST API + Socket.IO
+Backend (sandbox_agent.py)
+    │
+    ├── SandboxSession - E2B lifecycle management
+    └── SandboxAgent - Multi-turn LLM conversation
+           │
+           ├──► E2B Sandbox (Python execution)
+           └──► LLM Provider (OpenRouter/GitHub AI)
+```
+
+### Key Files
+
+| File | Description |
+|------|-------------|
+| `analyst_engine/sandbox_agent.py` | Core sandbox agent with E2B integration |
+| `frontend/src/pages/SandboxResearchPage.jsx` | Chat interface for research |
+| `SANDBOX_AGENT_PROMPT.md` | System prompt for the research agent |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `E2B_API_KEY` | E2B API key for cloud sandbox |
+| `FINANCIAL_DATASETS_API_KEY` | API key for financial data access |
+
+### Usage
+
+1. Navigate to `/sandbox` in the frontend
+2. Select an AI model (e.g., `github:openai/gpt-4o`)
+3. Start a research session
+4. Ask the agent to explore data (e.g., "Analyze insider trading for NVDA")
+5. Review code execution results
+6. When satisfied, deploy the generated strategy to the arena

@@ -72,6 +72,20 @@ market_data[symbol] = {
     # --- SEMANTIC & ATTENTION ALPHA ---
     'sentiment': 0.85,      # News Sentiment (-1.0 to 1.0).
     'attention': 1.2,       # Google Trends Search Volume Delta.
+
+    # --- FUNDAMENTAL ALPHA (FinancialDatasets.ai - Stocks Only) ---
+    'insider_sentiment': 0.75,      # Net insider buying ratio (-1.0 to 1.0)
+                                    # > 0.5 = Heavy insider buying (bullish)
+                                    # < -0.5 = Heavy insider selling (bearish)
+    'institutional_change': 5.2,    # QoQ institutional ownership change (%)
+                                    # > 2% = Major accumulation
+                                    # < -2% = Major distribution
+    'revenue_growth': 15.5,         # YoY revenue growth (%)
+    'profit_margin': 0.22,          # Current profit margin (0 to 1)
+    'pe_ratio': 25.5,               # Price-to-Earnings ratio
+    'earnings_surprise': 0.12,      # Latest earnings vs estimate (%)
+    'news_sentiment_score': 0.6,    # Pre-calculated news sentiment (-1 to 1)
+    'data_source': 'financial_datasets',  # 'financial_datasets' or 'fallback'
 }
 
 ## AGENT STATE (PERSISTENT - USE THIS INSTEAD OF GLOBALS!)
@@ -104,9 +118,11 @@ Create a strategy that fuses these signals using a "State-Based" logic:
 
 ## ===== CRITICAL TRADING RULES (MUST FOLLOW) =====
 
-### 1. FOCUS ON TOP 3 COINS ONLY
-- ONLY trade BTC, ETH, SOL. Ignore all other symbols.
-- `symbols = ['BTC', 'ETH', 'SOL']`
+### 1. TRADABLE ASSETS
+- **Crypto**: BTC, ETH, SOL (best liquidity and signal quality)
+- **Stocks**: AAPL, TSLA, NVDA, MSFT, GOOGL, AMZN, META (have fundamental data)
+- `symbols = ['BTC', 'ETH', 'SOL', 'AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META']`
+- Tip: For stocks, use `data.get('insider_sentiment')` to check if fundamental data is available.
 
 ### 2. POSITION SIZING (20% Risk Per Trade)
 - Risk up to 20% of CASH on a single trade.
@@ -125,7 +141,29 @@ Create a strategy that fuses these signals using a "State-Based" logic:
 - Short Entry: Score <= -2 (SELL to Open)
 - **Cooldown**: Wait 60 ticks after any trade.
 
-### 5. STOP-LOSS (-0.30%)
+### 5. FUNDAMENTAL SIGNAL SCORING (Stocks Only)
+For stocks (AAPL, TSLA, NVDA, MSFT, GOOGL, AMZN, META), add fundamental alpha:
+
+```python
+# Check if fundamental data is available (stocks only)
+insider = data.get('insider_sentiment')
+inst_change = data.get('institutional_change')
+rev_growth = data.get('revenue_growth')
+
+if insider is not None:  # Has fundamental data
+    if insider > 0.5: score += 1       # Heavy insider buying
+    if insider < -0.5: score -= 1      # Heavy insider selling
+
+if inst_change is not None:
+    if inst_change > 2.0: score += 1   # Institutional accumulation
+    if inst_change < -2.0: score -= 1  # Institutional distribution
+
+if rev_growth is not None:
+    if rev_growth > 20: score += 1     # Strong growth stock
+    if rev_growth < -10: score -= 1    # Declining revenue
+```
+
+### 6. STOP-LOSS (-0.30%)
 - Tight stop: -0.30% from entry (to limit losses).
 - Use: `if agent_state['current_pnl'].get(sym, {}).get('pnl_percent', 0) < -0.30:`
 - Emergency Arena stop at -2% exists as backup.
@@ -150,7 +188,8 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
     if agent_state is None:
         agent_state = {'entry_prices': {}, 'current_pnl': {}, 'custom': {}}
 
-    symbols = ['BTC', 'ETH', 'SOL']
+    # Crypto + Stocks
+    symbols = ['BTC', 'ETH', 'SOL', 'AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META']
 
     # Cooldown
     if tick - _last_trade_tick < 60:
@@ -474,6 +513,13 @@ market_data[symbol] = {{
     'micro_price': 98005.2, # Stoikov Fair Value.
     'ofi': 150.0,           # Order Flow Imbalance. Leading indicator of immediate pressure.
     'sentiment': 0.85,      # Global News Sentiment.
+
+    # FUNDAMENTAL ALPHA (Stocks Only - from FinancialDatasets.ai)
+    'insider_sentiment': 0.75,      # Net insider buying (-1 to 1). >0.5 = bullish
+    'institutional_change': 5.2,    # QoQ ownership change (%). >2 = accumulation
+    'revenue_growth': 15.5,         # YoY revenue growth (%)
+    'profit_margin': 0.22,          # Profit margin (0 to 1)
+    'pe_ratio': 25.5,               # Price-to-Earnings ratio
 }}
 
 ## AGENT STATE (PERSISTENT - USE THIS!)
@@ -509,7 +555,8 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
     if agent_state is None:
         agent_state = {{'entry_prices': {{}}, 'current_pnl': {{}}}}
 
-    symbols = ['BTC', 'ETH', 'SOL']
+    # Crypto + Stocks
+    symbols = ['BTC', 'ETH', 'SOL', 'AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META']
 
     # Cooldown
     if tick - _last_trade_tick < 60:

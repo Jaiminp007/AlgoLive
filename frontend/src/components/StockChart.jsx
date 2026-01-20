@@ -1,88 +1,104 @@
-import React from 'react';
-import { ResponsiveContainer, LineChart, XAxis, YAxis, Tooltip, CartesianGrid, Line, AreaChart, Area } from 'recharts';
+import React, { useMemo } from 'react';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 
-const StockChart = ({ data, symbol, color = '#2962ff' }) => {
+const StockChart = ({ data, symbol, color = '#10b981' }) => {
+    // Determine color from CSS variable or direct hex
+    const chartColor = useMemo(() => {
+        if (color.startsWith('var(')) {
+            // Map CSS variables to hex colors
+            const colorMap = {
+                'var(--profit)': '#10b981',
+                'var(--loss)': '#ef4444',
+                'var(--profit-light)': '#34d399',
+                'var(--loss-light)': '#f87171',
+            };
+            return colorMap[color] || '#10b981';
+        }
+        return color;
+    }, [color]);
+
     // Determine min/max for better axis scaling
-    const prices = data.map(d => d.price);
-    const minPrice = Math.min(...prices) * 0.999;
-    const maxPrice = Math.max(...prices) * 1.001;
+    const { minPrice, maxPrice } = useMemo(() => {
+        if (!data || data.length === 0) return { minPrice: 0, maxPrice: 100 };
+        const prices = data.map(d => d.price);
+        return {
+            minPrice: Math.min(...prices) * 0.999,
+            maxPrice: Math.max(...prices) * 1.001
+        };
+    }, [data]);
+
+    // Custom tooltip
+    const CustomTooltip = ({ active, payload }) => {
+        if (!active || !payload || payload.length === 0) return null;
+
+        return (
+            <div style={{
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--bg-border)',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                fontSize: '0.8rem'
+            }}>
+                <div style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
+                    ${payload[0].value?.toFixed(2)}
+                </div>
+            </div>
+        );
+    };
+
+    if (!data || data.length === 0) {
+        return (
+            <div style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)',
+                fontSize: '0.75rem'
+            }}>
+                No data
+            </div>
+        );
+    }
 
     return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                <h3 style={{ margin: 0, fontSize: '0.85rem', color: color, display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <span style={{
-                        display: 'inline-block',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        background: `${color}20`,
-                        border: `1px solid ${color}40`,
-                        fontSize: '0.7rem'
-                    }}>{symbol}</span>
-                </h3>
-            </div>
+        <div style={{ width: '100%', height: '100%' }}>
+            <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                    <defs>
+                        <linearGradient id={`gradient-${symbol}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={chartColor} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={chartColor} stopOpacity={0.05} />
+                        </linearGradient>
+                    </defs>
 
-            <div style={{ flex: 1, minHeight: '0', position: 'relative' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={data}>
-                        <defs>
-                            <linearGradient id={`gradient-${symbol}`} x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor={color} stopOpacity={0.3} />
-                                <stop offset="95%" stopColor={color} stopOpacity={0} />
-                            </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} opacity={0.5} />
+                    <XAxis
+                        dataKey="time"
+                        type="number"
+                        domain={['dataMin', 'dataMax']}
+                        hide={true}
+                    />
 
-                        <XAxis
-                            dataKey="time"
-                            type="number"
-                            domain={['dataMin', 'dataMax']}
-                            hide={true}
-                        />
+                    <YAxis
+                        domain={[minPrice, maxPrice]}
+                        hide={true}
+                    />
 
-                        <YAxis
-                            domain={[minPrice, maxPrice]}
-                            hide={true}
-                        />
+                    <Tooltip content={<CustomTooltip />} />
 
-                        <Tooltip
-                            contentStyle={{
-                                backgroundColor: 'rgba(15, 16, 38, 0.95)',
-                                borderColor: '#2a2d50',
-                                color: '#fff',
-                                fontSize: '12px',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                                padding: '8px'
-                            }}
-                            labelFormatter={(label) => new Date(label * 1000).toLocaleTimeString()}
-                            formatter={(value) => [`$${value.toFixed(2)}`, 'Price']}
-                        />
-
-                        <Area
-                            type="monotone"
-                            dataKey="price"
-                            stroke={color}
-                            fillOpacity={1}
-                            fill={`url(#gradient-${symbol})`}
-                            strokeWidth={2}
-                            isAnimationActive={false}
-                        />
-                    </AreaChart>
-                </ResponsiveContainer>
-
-                {data.length > 0 && (
-                    <div style={{
-                        position: 'absolute',
-                        top: '5px',
-                        right: '5px',
-                        fontSize: '0.9rem',
-                        fontWeight: 'bold',
-                        color: '#fff'
-                    }}>
-                        ${data[data.length - 1].price.toFixed(2)}
-                    </div>
-                )}
-            </div>
+                    <Area
+                        type="monotone"
+                        dataKey="price"
+                        stroke={chartColor}
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill={`url(#gradient-${symbol})`}
+                        isAnimationActive={false}
+                    />
+                </AreaChart>
+            </ResponsiveContainer>
         </div>
     );
 };

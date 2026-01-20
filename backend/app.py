@@ -81,32 +81,23 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analyst_engine.brain import Brain
+from analyst_engine.sandbox_agent import SandboxAgent, get_sandbox_agent
 from market_simulation.arena import Arena
 
 # Agents to auto-load on start/reset
 default_agents = [
-    "Agent_10_github_openai_gpt_5",
-    "Agent_11_github_openai_gpt_4o",
-    "Agent_7_github_openai_gpt_5_",
-    "Agent_qwen_3_max",
-    "Agent_claude_opus_4_5",
-    "Agent_claude_sonnet_4_5",
-    "Agent_deepseek",
-    "Agent_gemini_3_flash_quick",
-    "Agent_gemini_3_flash_thinking",
-    "Agent_gemini_3_pro",
-    "Agent_glm_4_7",
-    "Agent_grok_4_thinking",
-    "Agent_kat_coder_pilot",
-    "Agent_nvidia_nemotron",
-    "Agent_open_ai_4o",
-    "Agent_open_ai_5_2_thinking",
-    "Agent_xiomi_mimo"
+    "Agent_momentum_breakout",
+    "Agent_mean_reversion",
+    "Agent_orderflow_alpha",
+    "Agent_volatility_regime",
+    "Agent_sentiment_momentum",
+    "Agent_multitimeframe_trend"
 ]
 
 # Global State
 arena = Arena(socketio, db)
 brain = Brain() # Instantiate Brain
+sandbox_agent = get_sandbox_agent(socketio)  # Sandbox research agent
 
 # DEFERRED STARTUP: Deploy agents and start arena AFTER server is ready
 def delayed_startup():
@@ -183,6 +174,28 @@ def get_status():
         'active_agents': list(arena.agents.keys())
     })
 
+@app.route('/agent_code/<name>', methods=['GET'])
+def get_agent_code(name):
+    """Returns the source code for a specific agent"""
+    try:
+        # Sanitize name to prevent path traversal
+        safe_name = name.replace('..', '').replace('/', '').replace('\\', '')
+        filepath = os.path.join(arena.agent_dir, f'{safe_name}.py')
+
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'Agent not found'}), 404
+
+        with open(filepath, 'r') as f:
+            code = f.read()
+
+        return jsonify({
+            'name': safe_name,
+            'code': code,
+            'filepath': filepath
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/leaderboard', methods=['GET'])
 def get_leaderboard():
     """Returns a sorted leaderboard of all agents"""
@@ -231,13 +244,14 @@ def health_check():
         if active_agents > 0:
             for agent_name, agent_data in arena.agents.items():
                 total_trades += agent_data.get('trades_count', 0)
-                total_equity += agent_data.get('equity', 100.0)
+                total_equity += agent_data.get('equity', 10000.0)
                 total_cashed_out += agent_data.get('cashed_out', 0.0)
 
-        # Calculate average ROI
+        # Calculate average ROI (starting balance is $10,000 per agent)
         avg_roi = 0
+        STARTING_BALANCE = 10000
         if active_agents > 0:
-            avg_roi = ((total_equity - (active_agents * 100)) / (active_agents * 100)) * 100
+            avg_roi = ((total_equity - (active_agents * STARTING_BALANCE)) / (active_agents * STARTING_BALANCE)) * 100
 
         response = {
             'status': 'healthy',
@@ -298,6 +312,10 @@ def generate_agent():
     if "error" in result:
         return jsonify(result), 500
     
+    # NEW: Persist code to DB
+    if "code" in result:
+        arena.save_agent_code(name, result["code"])
+    
     return jsonify(result)
 
 @app.route('/deploy_agent', methods=['POST'])
@@ -309,6 +327,16 @@ def deploy_agent():
         
     success = arena.load_agent(name, reload_module=True)
     if success:
+        # NEW: Ensure code is in DB (for migration/manual uploads)
+        try:
+            filepath = os.path.join(arena.agent_dir, f"{name}.py")
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    code = f.read()
+                arena.save_agent_code(name, code)
+        except Exception as e:
+            print(f"Error syncing {name} code to DB: {e}")
+
         # NOTE: Do NOT start arena here. Wait for explicit /start_arena call
         # after ALL agents are generated and deployed.
         return jsonify({'status': 'deployed', 'name': name})
@@ -321,7 +349,21 @@ def stop_agent():
     name = data.get('name')
     if name in arena.agents:
         del arena.agents[name]
-        return jsonify({'status': 'stopped', 'name': name})
+        # Also delete the agent file
+        agent_file = os.path.join(arena.agent_dir, f"{name}.py")
+        if os.path.exists(agent_file):
+            try:
+                os.remove(agent_file)
+                print(f"Deleted agent file: {agent_file}")
+            except Exception as e:
+                print(f"Failed to delete agent file {agent_file}: {e}")
+        # Remove from database as well
+        if arena.db is not None:
+            try:
+                arena.db.agents.delete_one({'name': name})
+            except Exception as e:
+                print(f"Failed to remove agent from DB: {e}")
+        return jsonify({'status': 'stopped', 'name': name, 'file_deleted': True})
     return jsonify({'error': 'Agent not found'}), 404
 
 @app.route('/start_arena', methods=['POST'])
@@ -362,28 +404,233 @@ def clear_all_data():
     try:
         # Stop arena if running
         arena.stop_loop()
-        
+
         # Clear MongoDB collections
         db.agents.drop()
         db.chart_history.drop()
         db.trades.drop()
-        
+
         # Clear in-memory state
         arena.agents.clear()
         arena.chart_history.clear()
-        
+
         # Delete agent files
         import glob
         agent_files = glob.glob(os.path.join(arena.agent_dir, 'Agent_*.py'))
         for f in agent_files:
             os.remove(f)
             print(f"Deleted: {f}")
-        
+
         print("ALL DATA CLEARED SUCCESSFULLY")
         return jsonify({'status': 'all_data_cleared'})
     except Exception as e:
         print(f"Error clearing data: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== SANDBOX RESEARCH AGENT ENDPOINTS ====================
+
+@app.route('/sandbox/create', methods=['POST'])
+def create_sandbox_session():
+    """
+    Create a new sandbox research session.
+
+    Request JSON:
+        { "model": "github:openai/gpt-4o" }
+
+    Response:
+        { "session_id": "uuid", "status": "created", "model": "..." }
+    """
+    data = request.json or {}
+    model = data.get('model', 'openai/gpt-4-turbo')
+
+    result = sandbox_agent.create_session(model)
+
+    if "error" in result:
+        return jsonify(result), 500
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/message', methods=['POST'])
+def send_sandbox_message():
+    """
+    Send a message to the sandbox agent (multi-turn chat).
+
+    Request JSON:
+        { "session_id": "uuid", "message": "Explore insider trading patterns" }
+
+    Response:
+        {
+            "response": "I'll analyze insider trading data...",
+            "code_blocks": [{ "code": "...", "result": "...", "error": null }],
+            "is_final": false,
+            "final_code": null
+        }
+    """
+    data = request.json or {}
+    session_id = data.get('session_id')
+    message = data.get('message')
+
+    if not session_id:
+        return jsonify({'error': 'session_id is required'}), 400
+    if not message:
+        return jsonify({'error': 'message is required'}), 400
+
+    # Process message (this may take a while due to LLM + code execution)
+    print(f"[SANDBOX] Processing message for session {session_id}: {message[:50]}...")
+    result = sandbox_agent.process_message(session_id, message)
+
+    if "error" in result:
+        print(f"[SANDBOX] Error in process_message: {result['error']}")
+        return jsonify(result), 400
+
+    print(f"[SANDBOX] Message processed successfully")
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/execute', methods=['POST'])
+def execute_sandbox_code():
+    """
+    Manually execute code in sandbox (user override).
+
+    Request JSON:
+        { "session_id": "uuid", "code": "print('Hello')" }
+
+    Response:
+        { "result": "Hello", "error": null }
+    """
+    data = request.json or {}
+    session_id = data.get('session_id')
+    code = data.get('code')
+
+    if not session_id:
+        return jsonify({'error': 'session_id is required'}), 400
+    if not code:
+        return jsonify({'error': 'code is required'}), 400
+
+    result = sandbox_agent.execute_code(session_id, code)
+
+    if "error" in result and result.get("error") == "Session not found":
+        return jsonify(result), 404
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/finalize', methods=['POST'])
+def finalize_sandbox_agent():
+    """
+    Extract final strategy from session and deploy to arena.
+
+    Request JSON:
+        { "session_id": "uuid", "agent_name": "Agent_sandbox_insider_001", "code": "optional fallback code" }
+
+    Response:
+        {
+            "success": true,
+            "agent_name": "Agent_sandbox_insider_001",
+            "filepath": "/path/to/agent.py",
+            "validation": { "syntax_valid": true, ... }
+        }
+    """
+    data = request.json or {}
+    session_id = data.get('session_id')
+    agent_name = data.get('agent_name')
+    code_override = data.get('code')  # Optional fallback code from frontend
+
+    if not session_id:
+        return jsonify({'error': 'session_id is required'}), 400
+    if not agent_name:
+        return jsonify({'error': 'agent_name is required'}), 400
+
+    result = sandbox_agent.finalize_strategy(session_id, agent_name, code_override)
+
+    if "error" in result:
+        status_code = 404 if "not found" in result.get("error", "").lower() else 400
+        return jsonify(result), status_code
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/status/<session_id>', methods=['GET'])
+def get_sandbox_status(session_id):
+    """
+    Get session status and metadata.
+
+    Response:
+        {
+            "session_id": "uuid",
+            "status": "active",
+            "model": "...",
+            "message_count": 5,
+            "has_final_strategy": false
+        }
+    """
+    result = sandbox_agent.get_session_status(session_id)
+
+    if "error" in result:
+        return jsonify(result), 404
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/history/<session_id>', methods=['GET'])
+def get_sandbox_history(session_id):
+    """
+    Get full message and execution history for a session.
+
+    Response:
+        {
+            "session_id": "uuid",
+            "messages": [...],
+            "executions": [...],
+            "final_code": "..."
+        }
+    """
+    result = sandbox_agent.get_session_history(session_id)
+
+    if "error" in result:
+        return jsonify(result), 404
+
+    return jsonify(result)
+
+
+@app.route('/sandbox/close', methods=['POST'])
+def close_sandbox_session():
+    """
+    Close session and cleanup sandbox resources.
+
+    Request JSON:
+        { "session_id": "uuid" }
+
+    Response:
+        { "success": true, "session_id": "uuid" }
+    """
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if not session_id:
+        return jsonify({'error': 'session_id is required'}), 400
+
+    result = sandbox_agent.close_session(session_id)
+
+    if "error" in result:
+        return jsonify(result), 404
+
+    return jsonify(result)
+
+
+# Socket.IO events for sandbox
+@socketio.on('sandbox_subscribe')
+def handle_sandbox_subscribe(data):
+    """Subscribe to sandbox session for real-time updates."""
+    from flask_socketio import join_room
+    session_id = data.get('session_id')
+    if session_id:
+        join_room(f"sandbox_{session_id}")
+        print(f"Client subscribed to sandbox session: {session_id}")
+
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))

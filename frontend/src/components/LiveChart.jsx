@@ -1,81 +1,232 @@
+import { useMemo } from 'react';
 import { ResponsiveContainer, LineChart, XAxis, YAxis, Tooltip, CartesianGrid, Line, ReferenceLine, Legend } from 'recharts';
 
-const LiveChart = ({ data, agents }) => {
-    // Generate distinct colors for agents (Neon/Bright for Dark Mode)
-    const colors = ['#00ff9d', '#ff3fac', '#00bcd4', '#ff9800', '#d500f9', '#2962ff'];
+// Midnight Terminal Agent Colors
+const AGENT_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 
-    // Debug log to ensure data is flowing
-    // console.log("LiveChart Data:", data.length, "Agents:", agents.map(a => a.name));
+const LiveChart = ({ data, agents, timeRange = 'ALL' }) => {
+    // Filter data based on time range
+    const filteredData = useMemo(() => {
+        if (timeRange === 'ALL' || data.length === 0) return data;
+
+        const now = Date.now() / 1000;
+        const ranges = {
+            '1H': 3600,
+            '4H': 14400,
+            '1D': 86400
+        };
+        const cutoff = now - (ranges[timeRange] || Infinity);
+        return data.filter(d => d.time >= cutoff);
+    }, [data, timeRange]);
+
+    // Calculate dynamic Y-axis domain based on actual agent values
+    const yDomain = useMemo(() => {
+        if (filteredData.length === 0 || agents.length === 0) {
+            return [9000, 11000]; // Default range around $10,000
+        }
+
+        let minVal = Infinity;
+        let maxVal = -Infinity;
+
+        // Find min/max across all agent values in the filtered data
+        filteredData.forEach(point => {
+            agents.forEach(agent => {
+                const val = point[agent.name];
+                if (val !== undefined && val !== null) {
+                    minVal = Math.min(minVal, val);
+                    maxVal = Math.max(maxVal, val);
+                }
+            });
+        });
+
+        // If no valid data found, use default
+        if (minVal === Infinity || maxVal === -Infinity) {
+            return [9000, 11000];
+        }
+
+        // Add 5% padding on each side for better visualization
+        const range = maxVal - minVal;
+        const padding = Math.max(range * 0.05, 100); // At least $100 padding
+
+        return [
+            Math.floor((minVal - padding) / 100) * 100, // Round down to nearest 100
+            Math.ceil((maxVal + padding) / 100) * 100   // Round up to nearest 100
+        ];
+    }, [filteredData, agents]);
+
+    // Check if $10,000 baseline is within the current view
+    const showBaseline = yDomain[0] <= 10000 && yDomain[1] >= 10000;
+
+    // Custom tooltip styling
+    const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload || payload.length === 0) return null;
+
+        return (
+            <div style={{
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--bg-border)',
+                borderRadius: '8px',
+                padding: '12px',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)'
+            }}>
+                <div style={{
+                    color: 'var(--text-muted)',
+                    fontSize: '0.75rem',
+                    marginBottom: '8px',
+                    borderBottom: '1px solid var(--bg-border)',
+                    paddingBottom: '8px'
+                }}>
+                    {new Date(label * 1000).toLocaleTimeString()}
+                </div>
+                {payload.map((entry, index) => (
+                    <div key={index} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px',
+                        padding: '4px 0',
+                        fontSize: '0.8rem'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                background: entry.color
+                            }}></span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{entry.name}</span>
+                        </div>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>
+                            ${entry.value?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </span>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    // Custom legend
+    const CustomLegend = ({ payload }) => {
+        return (
+            <div style={{
+                display: 'flex',
+                gap: '20px',
+                justifyContent: 'flex-start',
+                paddingTop: '12px',
+                paddingLeft: '60px'
+            }}>
+                {payload.map((entry, index) => (
+                    <div key={index} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        fontSize: '0.8rem'
+                    }}>
+                        <span style={{
+                            width: '10px',
+                            height: '10px',
+                            borderRadius: '50%',
+                            background: entry.color
+                        }}></span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{entry.value}</span>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    // Format Y-axis tick based on value magnitude
+    const formatYTick = (val) => {
+        if (val >= 1000) {
+            return `$${(val / 1000).toFixed(1)}k`;
+        }
+        return `$${val}`;
+    };
 
     return (
         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>AGENT EQUITY COMPARISON</h3>
-            <div style={{ flex: 1, minHeight: '300px', position: 'relative' }}>
-                <div style={{ position: 'absolute', top: 5, right: 5, zIndex: 10, fontSize: '10px', color: '#aaa', background: 'rgba(0,0,0,0.5)', padding: '2px 5px' }}>
-                    DEBUG: Agents: {agents.length} | Data: {data.length}
-                </div>
+            <div style={{ flex: 1, minHeight: '250px', position: 'relative' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={data}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2d50" vertical={false} opacity={0.5} />
+                    <LineChart data={filteredData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                        <defs>
+                            {AGENT_COLORS.map((color, index) => (
+                                <linearGradient key={index} id={`line-gradient-${index}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor={color} stopOpacity={0} />
+                                </linearGradient>
+                            ))}
+                        </defs>
 
-                        {/* X Axis */}
+                        <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="var(--bg-border)"
+                            vertical={false}
+                            opacity={0.5}
+                        />
+
                         <XAxis
                             dataKey="time"
                             type="number"
                             domain={['dataMin', 'dataMax']}
-                            tickFormatter={(unix) => new Date(unix * 1000).toLocaleTimeString()}
-                            stroke="#2a2d50"
+                            tickFormatter={(unix) => new Date(unix * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            stroke="var(--bg-border)"
                             fontSize={10}
-                            tick={{ fill: '#a0a5cc' }}
+                            tick={{ fill: 'var(--text-muted)' }}
+                            axisLine={{ stroke: 'var(--bg-border)' }}
+                            tickLine={{ stroke: 'var(--bg-border)' }}
                         />
 
-                        {/* Left Axis: Agent Equity (Highlight) */}
                         <YAxis
                             yAxisId="left"
                             orientation="left"
-                            domain={['auto', 'auto']}
-                            stroke="#2a2d50"
+                            domain={yDomain}
+                            stroke="var(--bg-border)"
                             width={60}
                             fontSize={10}
-                            tick={{ fill: '#a0a5cc' }}
-                            tickFormatter={(val) => `$${val.toLocaleString()}`}
+                            tick={{ fill: 'var(--text-muted)' }}
+                            tickFormatter={formatYTick}
+                            axisLine={{ stroke: 'var(--bg-border)' }}
+                            tickLine={{ stroke: 'var(--bg-border)' }}
+                            allowDataOverflow={false}
                         />
 
-                        <Tooltip
-                            contentStyle={{
-                                backgroundColor: 'rgba(15, 16, 38, 0.95)',
-                                borderColor: '#2a2d50',
-                                color: '#fff',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                                borderRadius: '8px'
-                            }}
-                            itemStyle={{ fontSize: '12px', padding: '0' }}
-                            labelStyle={{ color: '#a0a5cc', marginBottom: '5px' }}
-                            labelFormatter={(label) => new Date(label * 1000).toLocaleTimeString()}
-                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Legend content={<CustomLegend />} />
 
-                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-
-                        {/* Baseline at 10000 */}
-                        <ReferenceLine y={10000} yAxisId="left" stroke="#5c5f80" strokeDasharray="3 3" label={{ value: 'START ($10,000)', position: 'insideTopLeft', fill: '#5c5f80', fontSize: 10 }} />
+                        {/* Baseline at 10000 - only show if in view */}
+                        {showBaseline && (
+                            <ReferenceLine
+                                y={10000}
+                                yAxisId="left"
+                                stroke="var(--text-subtle)"
+                                strokeDasharray="3 3"
+                                label={{
+                                    value: 'START ($10,000)',
+                                    position: 'insideTopLeft',
+                                    fill: 'var(--text-subtle)',
+                                    fontSize: 10
+                                }}
+                            />
+                        )}
 
                         {/* Agent Lines */}
                         {agents.map((agent, index) => {
-                            // Ensure we have a valid color
-                            const color = colors[index % colors.length];
-                            // Debug: Log what we are trying to render
-                            // console.log(`Rendering Line for ${agent.name} with color ${color}`);
-
+                            const color = AGENT_COLORS[index % AGENT_COLORS.length];
                             return (
                                 <Line
                                     key={agent.name}
                                     yAxisId="left"
-                                    type="linear"
+                                    type="monotone"
                                     dataKey={agent.name}
                                     stroke={color}
-                                    strokeWidth={3}
+                                    strokeWidth={2.5}
                                     dot={false}
-                                    activeDot={{ r: 6 }}
+                                    activeDot={{
+                                        r: 6,
+                                        stroke: color,
+                                        strokeWidth: 2,
+                                        fill: 'var(--bg-surface)'
+                                    }}
                                     name={agent.name}
                                     isAnimationActive={false}
                                     connectNulls={true}
@@ -84,6 +235,20 @@ const LiveChart = ({ data, agents }) => {
                         })}
                     </LineChart>
                 </ResponsiveContainer>
+
+                {/* No data overlay */}
+                {filteredData.length === 0 && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        color: 'var(--text-muted)',
+                        fontSize: '0.875rem'
+                    }}>
+                        Waiting for chart data...
+                    </div>
+                )}
             </div>
         </div>
     );

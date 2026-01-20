@@ -1,11 +1,14 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { socket, api } from '../api';
 import { Link } from 'react-router-dom';
 import LiveChart from './LiveChart';
 import TradeLog from './TradeLog';
-import StockChart from './StockChart'; // NEW
-import AgentDetailModal from './AgentDetailModal'; // NEW
-import NewsFeed from './NewsFeed'; // NEW
+import StockChart from './StockChart';
+import AgentDetailModal from './AgentDetailModal';
+import NewsFeed from './NewsFeed';
+
+// Agent colors matching Midnight Terminal palette
+const AGENT_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
 
 const Dashboard = () => {
     const [priceData, setPriceData] = useState([]);
@@ -15,16 +18,52 @@ const Dashboard = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [currentPrice, setCurrentPrice] = useState(null);
     const [marketPrices, setMarketPrices] = useState({});
-    const [priceColor, setPriceColor] = useState('var(--text-primary)');
-    const [notifications, setNotifications] = useState([]);
     const [priceColors, setPriceColors] = useState({});
-
-    // New State for Stock History & UI
-    const [stockHistory, setStockHistory] = useState({}); // { SYMBOL: [{time, price}, ...] }
+    const [notifications, setNotifications] = useState([]);
+    const [stockHistory, setStockHistory] = useState({});
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [timeRange, setTimeRange] = useState('ALL');
+
+    // Market status tabs
+    const [marketTab, setMarketTab] = useState('live'); // 'live' or 'closed'
+    const [stockMarketOpen, setStockMarketOpen] = useState(null); // null = unknown, true/false from backend
 
     const lastPriceRef = useRef(null);
     const prevPricesRef = useRef({});
+
+    // Crypto symbols (always live)
+    const CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB'];
+
+    // Stock symbols
+    const STOCK_SYMBOLS = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META'];
+
+    // Calculate stats
+    const stats = useMemo(() => {
+        // Total equity across all agents
+        const totalEquity = agents.reduce((sum, a) => sum + (a.equity || 10000), 0);
+        const startingEquity = agents.length * 10000;
+        const totalPnL = totalEquity - startingEquity;
+        const totalPnLPercent = startingEquity > 0 ? (totalPnL / startingEquity * 100) : 0;
+
+        const avgRoi = agents.length > 0
+            ? agents.reduce((sum, a) => sum + (a.roi || 0), 0) / agents.length
+            : 0;
+        const totalTrades = agents.reduce((sum, a) => sum + (a.trades || 0), 0);
+        const todayTrades = logs.filter(l => {
+            const logTime = new Date(l.timestamp * 1000);
+            const today = new Date();
+            return logTime.toDateString() === today.toDateString();
+        }).length;
+
+        return {
+            totalEquity: totalEquity > 1000000 ? `$${(totalEquity / 1000000).toFixed(2)}M` : `$${(totalEquity / 1000).toFixed(1)}K`,
+            totalPnLPercent: totalPnLPercent.toFixed(2),
+            activeAgents: agents.length,
+            avgRoi: avgRoi.toFixed(2),
+            totalTrades,
+            todayTrades
+        };
+    }, [agents, logs]);
 
     const addNotification = (message, type = 'info') => {
         const id = Date.now();
@@ -34,21 +73,21 @@ const Dashboard = () => {
         }, 5000);
     };
 
+    // Get color for agent by index
+    const getAgentColor = (index) => AGENT_COLORS[index % AGENT_COLORS.length];
+
     useEffect(() => {
         if (socket.connected) {
-            console.log('socket already connected');
             setIsConnected(true);
             socket.emit('request_history');
         }
 
         socket.on('connect', () => {
-            console.log('Connected to socket');
             setIsConnected(true);
             socket.emit('request_history');
         });
 
         socket.on('disconnect', () => {
-            console.log('Disconnected');
             setIsConnected(false);
         });
 
@@ -56,15 +95,10 @@ const Dashboard = () => {
             const formatted = history.map(h => {
                 const ts = Number(h.timestamp);
                 const time = ts > 1000000000000 ? ts / 1000 : ts;
-                return {
-                    time: time,
-                    price: h.price,
-                    ...h.agents
-                };
+                return { time, price: h.price, ...h.agents };
             }).sort((a, b) => a.time - b.time);
 
             setPriceData(formatted);
-
             if (formatted.length > 0) {
                 const last = formatted[formatted.length - 1];
                 lastPriceRef.current = last.price;
@@ -73,7 +107,6 @@ const Dashboard = () => {
         });
 
         socket.on('chart_tick', (tick) => {
-            // Legacy tick handler for single asset/general updates
             const newPrice = tick.price;
             lastPriceRef.current = newPrice;
             setCurrentPrice(newPrice);
@@ -81,8 +114,7 @@ const Dashboard = () => {
             setPriceData(prev => {
                 const ts = Number(tick.timestamp);
                 const time = ts > 1000000000000 ? ts / 1000 : ts;
-                const newPoint = { time: time, price: tick.price, ...tick.agents };
-                return [...prev, newPoint];
+                return [...prev, { time, price: tick.price, ...tick.agents }];
             });
         });
 
@@ -97,17 +129,23 @@ const Dashboard = () => {
         socket.on('tick_bundle', (bundle) => {
             const { market, chart, leaderboard } = bundle;
 
-            // Update Stock Data (Multi-Asset)
             if (market && market.prices) {
                 setMarketPrices(market.prices);
 
-                // Update Colors
+                // Capture stock market status from backend
+                if (market.prices._stock_market_open !== undefined) {
+                    setStockMarketOpen(market.prices._stock_market_open);
+                }
+
                 const colorUpdates = {};
                 Object.entries(market.prices).forEach(([sym, price]) => {
+                    // Skip metadata keys
+                    if (sym.startsWith('_')) return;
+
                     const prevPrice = prevPricesRef.current[sym];
                     if (prevPrice !== undefined) {
-                        if (price > prevPrice) colorUpdates[sym] = '#00c853';
-                        else if (price < prevPrice) colorUpdates[sym] = '#d50000';
+                        if (price > prevPrice) colorUpdates[sym] = 'profit';
+                        else if (price < prevPrice) colorUpdates[sym] = 'loss';
                     }
                     prevPricesRef.current[sym] = price;
                 });
@@ -115,19 +153,20 @@ const Dashboard = () => {
                     setPriceColors(prev => ({ ...prev, ...colorUpdates }));
                 }
 
-                // Update Stock History (Local Accumulation)
-                const ts = Date.now() / 1000; // Use current time for sync
+                const ts = Date.now() / 1000;
                 setStockHistory(prev => {
                     const next = { ...prev };
                     Object.entries(market.prices).forEach(([sym, price]) => {
+                        // Skip metadata keys
+                        if (sym.startsWith('_')) return;
+
                         if (!next[sym]) next[sym] = [];
-                        next[sym] = [...next[sym], { time: ts, price }].slice(-100); // Keep last 100 points
+                        next[sym] = [...next[sym], { time: ts, price }].slice(-100);
                     });
                     return next;
                 });
             }
 
-            // Update Equity Chart
             if (chart) {
                 setPriceData(prev => {
                     const ts = Number(chart.timestamp);
@@ -148,11 +187,11 @@ const Dashboard = () => {
         });
 
         socket.on('agent_regenerating', (data) => {
-            addNotification(`⚠️ Regenerating ${data.name}... Critique: ${data.critique.slice(0, 50)}...`, 'warning');
+            addNotification(`Regenerating ${data.name}... Critique: ${data.critique.slice(0, 50)}...`, 'warning');
         });
 
         socket.on('agent_deployed', (data) => {
-            addNotification(`🚀 ${data.name} Updated & Deployed!`, 'success');
+            addNotification(`${data.name} Updated & Deployed!`, 'success');
         });
 
         api.get('/status').then(res => console.log("System Status:", res.data));
@@ -169,12 +208,59 @@ const Dashboard = () => {
         };
     }, []);
 
-    // Helper to get color for stock chart
-    const getStockColor = (sym) => {
-        // Deterministic color hash or specific mapping
-        const colors = ['#2962ff', '#ff9800', '#00c853', '#d500f9', '#00bcd4', '#ff3d00'];
-        const hash = sym.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        return colors[hash % colors.length];
+    // Determine if market is open (uses backend status or fallback calculation)
+    const isMarketOpen = (symbol) => {
+        // Crypto is always open
+        if (CRYPTO_SYMBOLS.includes(symbol)) return true;
+
+        // For stocks, use backend status if available
+        if (stockMarketOpen !== null) {
+            return stockMarketOpen;
+        }
+
+        // Fallback: calculate locally (Eastern Time)
+        const now = new Date();
+        // Convert to ET by creating a date string in ET timezone
+        const etTimeStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+        const etDate = new Date(etTimeStr);
+
+        const hour = etDate.getHours();
+        const minute = etDate.getMinutes();
+        const day = etDate.getDay();
+
+        // Weekday check (Mon=1, Fri=5)
+        if (day === 0 || day === 6) return false;
+
+        // Market hours: 9:30 AM - 4:30 PM ET
+        const timeInMinutes = hour * 60 + minute;
+        const openTime = 9 * 60 + 30;  // 9:30 AM
+        const closeTime = 16 * 60 + 30; // 4:30 PM
+
+        return timeInMinutes >= openTime && timeInMinutes <= closeTime;
+    };
+
+    // Get price change percentage
+    const getPriceChange = (sym) => {
+        const history = stockHistory[sym];
+        if (!history || history.length < 2) return null;
+        const first = history[0].price;
+        const last = history[history.length - 1].price;
+        return ((last - first) / first * 100).toFixed(2);
+    };
+
+    // Filter symbols by market status for tabs
+    const getLiveSymbols = () => {
+        return Object.keys(stockHistory).filter(sym => {
+            if (CRYPTO_SYMBOLS.includes(sym)) return true; // Crypto always live
+            return isMarketOpen(sym); // Stocks only if market open
+        });
+    };
+
+    const getClosedSymbols = () => {
+        return Object.keys(stockHistory).filter(sym => {
+            if (CRYPTO_SYMBOLS.includes(sym)) return false; // Crypto never closed
+            return !isMarketOpen(sym); // Stocks only if market closed
+        });
     };
 
     return (
@@ -191,127 +277,405 @@ const Dashboard = () => {
             {/* Notifications */}
             <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {notifications.map(n => (
-                    <div key={n.id} style={{
-                        padding: '15px 20px',
-                        background: n.type === 'success' ? 'rgba(0, 200, 83, 0.9)' : n.type === 'warning' ? 'rgba(255, 171, 0, 0.9)' : 'rgba(41, 98, 255, 0.9)',
-                        color: '#fff',
-                        borderRadius: '8px',
-                        backdropFilter: 'blur(10px)',
-                        boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-                        animation: 'fadeIn 0.3s ease',
-                        maxWidth: '400px'
-                    }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '0.8rem', opacity: 0.8 }}>
+                    <div key={n.id} className={`notification notification-${n.type}`}>
+                        <div style={{ fontWeight: '600', marginBottom: '4px', fontSize: '0.7rem', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                             {n.type === 'success' ? 'SUCCESS' : n.type === 'warning' ? 'REGENERATING' : 'INFO'}
                         </div>
-                        <div style={{ fontSize: '0.9rem' }}>{n.message}</div>
+                        <div style={{ fontSize: '0.875rem' }}>{n.message}</div>
                     </div>
                 ))}
             </div>
 
-            <header className="header glass-panel" style={{ zIndex: 100 }}>
-                <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    ALGO<span style={{ color: 'var(--accent-orange)' }}>CLASH</span> LIVE
-                    <span style={{
-                        fontSize: '0.7rem',
-                        padding: '2px 6px',
-                        background: isConnected ? 'rgba(0, 200, 83, 0.2)' : 'rgba(213, 0, 0, 0.2)',
-                        color: isConnected ? '#00c853' : '#d50000',
-                        borderRadius: '4px',
-                        border: isConnected ? '1px solid rgba(0, 200, 83, 0.3)' : '1px solid rgba(213, 0, 0, 0.3)'
-                    }}>
-                        {isConnected ? 'ONLINE' : 'OFFLINE'}
+            {/* Header */}
+            <header className="header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <span className="logo">
+                        AlgoClash <span style={{ color: 'var(--accent-primary)' }}>Live</span>
+                    </span>
+                    <span className={`badge ${isConnected ? 'badge-online' : 'badge-offline'}`}>
+                        <span style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: isConnected ? 'var(--profit)' : 'var(--loss)',
+                            display: 'inline-block'
+                        }}></span>
+                        {isConnected ? 'Online' : 'Offline'}
                     </span>
                 </div>
+                <nav className="nav-links">
+                    <Link to="/dashboard" className="nav-link active">Dashboard</Link>
+                    <Link to="/leaderboard" className="nav-link">Leaderboard</Link>
+                    <Link to="/sandbox" className="nav-link" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Sandbox
+                        <span style={{
+                            fontSize: '0.6rem',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: 'var(--accent-primary)',
+                            color: 'var(--bg-base)',
+                            fontWeight: '700',
+                            letterSpacing: '0.5px'
+                        }}>BETA</span>
+                    </Link>
+                    <a href="mailto:contact@algoclash.com?subject=AlgoClash%20Inquiry" className="nav-link">Contact</a>
+                </nav>
             </header>
 
-            {/* TOP ROW: Equity Chart */}
-            <div className="glass-panel" style={{ gridColumn: '1 / 3', gridRow: '2 / 3', padding: '15px', display: 'flex', flexDirection: 'column' }}>
-                <LiveChart data={priceData} agents={agents} />
-            </div>
-
-            {/* BOTTOM LEFT: Stock Charts (Grid) */}
-            <div className="glass-panel" style={{ gridColumn: '1 / 2', gridRow: '3 / 4', padding: '15px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <h3 style={{ margin: '0 0 15px 0', fontSize: '0.9rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
-                    MARKET OVERVIEW
-                </h3>
-                <div style={{
-                    flex: 1,
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                    gap: '15px',
-                    overflowY: 'auto',
-                    paddingRight: '5px'
-                }}>
-                    {Object.keys(stockHistory).length > 0 ? (
-                        Object.entries(stockHistory).map(([sym, history]) => (
-                            <div key={sym} style={{ height: '150px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '10px' }}>
-                                <StockChart data={history} symbol={sym} color={getStockColor(sym)} />
-                            </div>
-                        ))
-                    ) : (
-                        <div style={{ padding: '20px', color: 'var(--text-secondary)', gridColumn: '1/-1', textAlign: 'center' }}>
-                            Waiting for market data...
-                        </div>
-                    )}
+            {/* Stats Row */}
+            <div className="stats-row">
+                <div className="stat-card">
+                    <div className="stat-label">Total Equity</div>
+                    <div className="stat-value">
+                        {stats.totalEquity}
+                        <span className={`stat-change ${parseFloat(stats.totalPnLPercent) >= 0 ? 'positive' : 'negative'}`}>
+                            {parseFloat(stats.totalPnLPercent) >= 0 ? '+' : ''}{stats.totalPnLPercent}%
+                        </span>
+                    </div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-label">Active Agents</div>
+                    <div className="stat-value">{stats.activeAgents}</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-label">Avg ROI</div>
+                    <div className="stat-value" style={{ color: parseFloat(stats.avgRoi) >= 0 ? 'var(--profit)' : 'var(--loss)' }}>
+                        {parseFloat(stats.avgRoi) >= 0 ? '+' : ''}{stats.avgRoi}%
+                    </div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-label">Total Trades</div>
+                    <div className="stat-value">
+                        {stats.totalTrades}
+                        <span className="stat-change positive">+{stats.todayTrades} today</span>
+                    </div>
                 </div>
             </div>
 
-            {/* BOTTOM RIGHT: Agents & Logs */}
-            <div style={{ gridColumn: '2 / 3', gridRow: '3 / 4', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-                {/* Active Agents List */}
-                <div className="glass-panel" style={{ flex: '0 0 auto', maxHeight: '50%', padding: '15px', display: 'flex', flexDirection: 'column' }}>
-                    <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>ACTIVE AGENTS</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flex: 1 }}>
-                        {agents.map(agent => (
-                            <div
-                                key={agent.name}
-                                onClick={() => setSelectedAgent(agent)}
-                                style={{
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '4px',
-                                    padding: '10px',
-                                    background: 'rgba(255,255,255,0.03)',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer',
-                                    transition: 'background 0.2s'
-                                }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
-                                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+            {/* Main Chart Area */}
+            <div className="glass-panel" style={{ gridColumn: '1 / 2', gridRow: '3 / 4', padding: '20px', display: 'flex', flexDirection: 'column' }}>
+                <div className="section-header">
+                    <div>
+                        <div className="section-title">Agent Equity Comparison</div>
+                        <div className="section-subtitle">Real-time portfolio performance</div>
+                    </div>
+                    <div className="time-selector">
+                        {['1H', '4H', '1D', 'ALL'].map(t => (
+                            <button
+                                key={t}
+                                className={`time-btn ${timeRange === t ? 'active' : ''}`}
+                                onClick={() => setTimeRange(t)}
                             >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{agent.name}</div>
-                                    <div style={{
-                                        color: (agent.equity - 100) >= 0 ? '#00c853' : '#d50000',
-                                        fontWeight: 'bold',
-                                        fontSize: '0.9rem'
-                                    }}>
-                                        ${agent.equity.toFixed(2)}
+                                {t}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div style={{ flex: 1, minHeight: 0 }}>
+                    <LiveChart data={priceData} agents={agents} timeRange={timeRange} />
+                </div>
+            </div>
+
+            {/* Right Sidebar: Active Agents + Recent Trades */}
+            <div style={{ gridColumn: '2 / 3', gridRow: '3 / 4', display: 'flex', flexDirection: 'column', gap: '16px', minHeight: '500px', height: '100%' }}>
+                {/* Active Agents */}
+                <div className="glass-panel" style={{ flex: '0 0 auto', padding: '20px', maxHeight: '320px', overflow: 'hidden' }}>
+                    <div className="section-header">
+                        <div className="section-title">Active Agents</div>
+                        <Link to="/" style={{ color: 'var(--accent-primary)', fontSize: '0.75rem', textDecoration: 'none' }}>+ Add</Link>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto' }}>
+                        {agents.map((agent, index) => {
+                            const roi = agent.roi || ((agent.equity - 10000) / 10000 * 100);
+                            const isProfit = roi >= 0;
+                            return (
+                                <div
+                                    key={agent.name}
+                                    onClick={() => setSelectedAgent(agent)}
+                                    style={{
+                                        padding: '12px',
+                                        background: 'rgba(17, 24, 39, 0.5)',
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        transition: 'background 0.2s',
+                                        borderLeft: `3px solid ${getAgentColor(index)}`
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(31, 41, 55, 0.5)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(17, 24, 39, 0.5)'}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{
+                                                width: '8px',
+                                                height: '8px',
+                                                borderRadius: '50%',
+                                                background: getAgentColor(index)
+                                            }}></span>
+                                            <span style={{ fontWeight: '500', color: 'var(--text-primary)', fontSize: '0.9rem' }}>{agent.name}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span className={`badge ${isProfit ? 'badge-profit' : 'badge-loss'}`}>
+                                                {isProfit ? '+' : ''}{roi.toFixed(2)}%
+                                            </span>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (window.confirm(`Remove ${agent.name} from the arena?`)) {
+                                                        api.post('/stop_agent', { name: agent.name })
+                                                            .then(() => {
+                                                                addNotification(`${agent.name} removed from arena`, 'info');
+                                                            })
+                                                            .catch(err => {
+                                                                addNotification(`Failed to remove ${agent.name}: ${err.message}`, 'warning');
+                                                            });
+                                                    }
+                                                }}
+                                                style={{
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    color: 'var(--text-muted)',
+                                                    cursor: 'pointer',
+                                                    padding: '2px 6px',
+                                                    fontSize: '1rem',
+                                                    borderRadius: '4px',
+                                                    transition: 'all 0.2s',
+                                                    lineHeight: '1'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                                                    e.currentTarget.style.color = '#ef4444';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = 'transparent';
+                                                    e.currentTarget.style.color = 'var(--text-muted)';
+                                                }}
+                                                title="Remove agent"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                        <span style={{ fontSize: '1.25rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                                            ${agent.equity?.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '10,000'}
+                                        </span>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {agent.trades || 0} trades
+                                        </span>
                                     </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: '10px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                                    <span>W: <span style={{ color: '#fff' }}>{agent.win_rate || 0}%</span></span>
-                                    <span>S: <span style={{ color: '#fff' }}>{agent.sharpe || 0}</span></span>
-                                    <span>T: <span style={{ color: '#fff' }}>{agent.trades || 0}</span></span>
-                                </div>
+                            );
+                        })}
+                        {agents.length === 0 && (
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', padding: '20px', textAlign: 'center' }}>
+                                No agents active. <Link to="/" style={{ color: 'var(--accent-primary)' }}>Deploy one</Link>
                             </div>
-                        ))}
-                        {agents.length === 0 && <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No agents active.</div>}
+                        )}
                     </div>
                 </div>
 
-                {/* Recent Trade Log */}
-                <div className="glass-panel" style={{ flex: 1, padding: '15px', display: 'flex', gap: '15px', overflow: 'hidden' }}>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                        <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>RECENT TRADES</h3>
-                        <TradeLog logs={logs} />
+                {/* Recent Trades */}
+                <div className="glass-panel" style={{ flex: '1 1 auto', minHeight: '280px', padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div className="section-header">
+                        <div className="section-title">Recent Trades</div>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>View All</span>
                     </div>
-                    <div style={{ width: '350px', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '15px' }}>
-                        <h3 style={{ margin: '0 0 10px 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>LIVE NEWS & SENTIMENT</h3>
-                        <NewsFeed news={news} />
+                    <div style={{ flex: 1, overflow: 'auto', minHeight: '180px' }}>
+                        <TradeLog logs={logs.slice(0, 10)} />
                     </div>
+                </div>
+            </div>
+
+            {/* Market Overview */}
+            <div className="glass-panel" style={{ gridColumn: '1 / -1', gridRow: '4 / 5', padding: '16px', display: 'flex', flexDirection: 'column' }}>
+                <div className="section-header" style={{ marginBottom: '12px' }}>
+                    <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        Market Overview
+                        {/* Tab Buttons */}
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                                onClick={() => setMarketTab('live')}
+                                style={{
+                                    padding: '6px 12px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    borderRadius: '6px',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    background: marketTab === 'live' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)',
+                                    color: marketTab === 'live' ? 'var(--bg-base)' : 'var(--text-muted)',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                <span style={{
+                                    display: 'inline-block',
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    background: '#10b981',
+                                    marginRight: '6px',
+                                    animation: 'pulse 2s infinite'
+                                }}></span>
+                                Live Markets ({getLiveSymbols().length})
+                            </button>
+                            <button
+                                onClick={() => setMarketTab('closed')}
+                                style={{
+                                    padding: '6px 12px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '600',
+                                    borderRadius: '6px',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    background: marketTab === 'closed' ? 'rgba(156, 163, 175, 0.3)' : 'rgba(255,255,255,0.1)',
+                                    color: marketTab === 'closed' ? 'var(--text-primary)' : 'var(--text-muted)',
+                                    transition: 'all 0.2s'
+                                }}
+                            >
+                                Closed Markets ({getClosedSymbols().length})
+                            </button>
+                        </div>
+                    </div>
+                    {marketTab === 'closed' && (
+                        <span style={{
+                            fontSize: '0.7rem',
+                            color: 'var(--text-muted)',
+                            background: 'rgba(156, 163, 175, 0.2)',
+                            padding: '4px 8px',
+                            borderRadius: '4px'
+                        }}>
+                            Cached prices • No API calls
+                        </span>
+                    )}
+                </div>
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                    gap: '12px'
+                }}>
+                    {(() => {
+                        const symbols = marketTab === 'live' ? getLiveSymbols() : getClosedSymbols();
+
+                        if (symbols.length === 0 && Object.keys(stockHistory).length > 0) {
+                            return (
+                                <div style={{
+                                    gridColumn: '1 / -1',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: 'var(--text-muted)',
+                                    padding: '30px'
+                                }}>
+                                    {marketTab === 'live' ? (
+                                        <>
+                                            <span style={{ fontSize: '2rem', marginBottom: '8px' }}>🌙</span>
+                                            <span>Stock market is closed</span>
+                                            <span style={{ fontSize: '0.75rem', marginTop: '4px' }}>
+                                                View Closed Markets tab for last known prices
+                                            </span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span style={{ fontSize: '2rem', marginBottom: '8px' }}>☀️</span>
+                                            <span>All markets are open!</span>
+                                            <span style={{ fontSize: '0.75rem', marginTop: '4px' }}>
+                                                Switch to Live Markets for real-time data
+                                            </span>
+                                        </>
+                                    )}
+                                </div>
+                            );
+                        }
+
+                        if (symbols.length === 0) {
+                            return (
+                                <div style={{
+                                    gridColumn: '1 / -1',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: 'var(--text-muted)',
+                                    padding: '20px'
+                                }}>
+                                    Waiting for market data...
+                                </div>
+                            );
+                        }
+
+                        return symbols.map(sym => {
+                            const history = stockHistory[sym];
+                            if (!history) return null;
+
+                            const change = getPriceChange(sym);
+                            const isUp = change && parseFloat(change) >= 0;
+                            const open = isMarketOpen(sym);
+                            const currentPriceVal = history[history.length - 1]?.price;
+
+                            return (
+                                <div
+                                    key={sym}
+                                    className={`market-card ${!open ? 'closed' : ''}`}
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        padding: '14px',
+                                        height: '130px'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                        <span style={{
+                                            fontSize: '0.7rem',
+                                            fontWeight: '600',
+                                            color: 'var(--text-muted)',
+                                            textTransform: 'uppercase',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '4px'
+                                        }}>
+                                            {sym}
+                                            {!open && (
+                                                <span style={{
+                                                    fontSize: '0.6rem',
+                                                    background: 'rgba(156, 163, 175, 0.3)',
+                                                    padding: '1px 4px',
+                                                    borderRadius: '3px'
+                                                }}>CACHED</span>
+                                            )}
+                                            {CRYPTO_SYMBOLS.includes(sym) && (
+                                                <span style={{
+                                                    fontSize: '0.6rem',
+                                                    background: 'rgba(16, 185, 129, 0.2)',
+                                                    color: '#10b981',
+                                                    padding: '1px 4px',
+                                                    borderRadius: '3px'
+                                                }}>24/7</span>
+                                            )}
+                                        </span>
+                                        {change && (
+                                            <span style={{
+                                                color: isUp ? 'var(--profit)' : 'var(--loss)',
+                                                fontSize: '0.75rem',
+                                                fontWeight: '600'
+                                            }}>
+                                                {isUp ? '↑' : '↓'} {Math.abs(parseFloat(change))}%
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px' }}>
+                                        ${currentPriceVal?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}
+                                    </div>
+                                    <div style={{ flex: 1, minHeight: '45px' }}>
+                                        <StockChart
+                                            data={history}
+                                            symbol={sym}
+                                            color={isUp ? 'var(--profit)' : 'var(--loss)'}
+                                        />
+                                    </div>
+                                </div>
+                            );
+                        });
+                    })()}
                 </div>
             </div>
         </div>

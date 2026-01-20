@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import SelectionPage from './pages/SelectionPage';
 import DashboardPage from './pages/DashboardPage';
 import LeaderboardPage from './pages/LeaderboardPage';
+import SandboxResearchPage from './pages/SandboxResearchPage';
 import './index.css';
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
                     <Route path="/" element={<SelectionPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/leaderboard" element={<LeaderboardPage />} />
+                    <Route path="/sandbox" element={<SandboxResearchPage />} />
                 </Routes>
             </div>
         </Router>

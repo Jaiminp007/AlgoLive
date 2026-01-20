@@ -75,7 +75,12 @@ class Arena:
         # ATTENTION FEED INIT (Google Trends)
         self.attention_feed = AttentionFeed()
         self.attention_cache = {}  # Cached attention values
-             
+
+        # FUNDAMENTAL DATA CACHE (FinancialDatasets.ai)
+        self.fundamental_cache = {}  # {symbol: {data}}
+        self.last_fundamental_update = 0
+        self.fundamental_interval = 3600  # 1 hour
+
         # Warmup
         print("Arena: Fetching Market History for Warmup...")
         raw_history = self.data_feed.get_historical_data(limit=100, timeframe='1m')
@@ -96,7 +101,16 @@ class Arena:
                 } for d in data]
                 self.market_history[sym].extend(normalized_data)
         print(f"Arena: Loaded history for {list(raw_history.keys())}")
-        
+
+        # Initial fundamental data fetch for stocks (run in background to avoid blocking)
+        # Only start if market is open to save API calls
+        if hasattr(self.data_feed, 'fd_provider') and self.data_feed.fd_provider:
+            if self.data_feed.is_stock_market_open():
+                print("Arena: Starting background fundamental data fetch from FinancialDatasets.ai...")
+                threading.Thread(target=self._update_fundamental_data, daemon=True).start()
+            else:
+                print("Arena: Stock market closed - skipping fundamental data fetch to save API calls")
+
         # Restore state
         if self.db is not None:
             self._restore_state()
@@ -144,9 +158,35 @@ class Arena:
         try:
             saved = self.db.agents.find()
             count = 0
+            restored_files = 0
+            
+            # First pass: Restore files from DB code if missing on disk
+            for doc in saved:
+                name = doc.get('name')
+                code = doc.get('code')
+                if name and code:
+                    filepath = os.path.join(self.agent_dir, f"{name}.py")
+                    if not os.path.exists(filepath):
+                        try:
+                            with open(filepath, 'w') as f:
+                                f.write(code)
+                            restored_files += 1
+                            print(f"Arena: Restored {name}.py from DB")
+                        except Exception as e:
+                            print(f"Arena: Failed to restore file for {name}: {e}")
+
+            # Second pass: Load agents
+            # Rewind cursor or fetch again
+            saved = self.db.agents.find()
+            
             for doc in saved:
                 name = doc['name']
-                if self.load_agent(name):
+                # Skip if file still doesn't exist (loading will fail anyway)
+                filepath = os.path.join(self.agent_dir, f"{name}.py")
+                if not os.path.exists(filepath):
+                    continue
+
+                if self.load_agent(name, restore=True):
                     self.agents[name]['equity'] = doc.get('equity', 100.0)
                     self.agents[name]['cash'] = doc.get('cash', 100.0)
                     self.agents[name]['total_fees'] = doc.get('total_fees', 0.0)
@@ -165,10 +205,55 @@ class Arena:
                     self.agents[name]['sharpe'] = doc.get('sharpe', 0.0)
                     count += 1
                 else:
-                    self.db.agents.delete_one({'name': name})
-            print(f"Restored {count} agents.")
+                    # If load fails (e.g. syntax error in restored code), do NOT delete immediately
+                    # self.db.agents.delete_one({'name': name})
+                    print(f"Arena: Warning - Could not load {name} even after file restore.")
+            
+            print(f"Restored {count} agents ({restored_files} files recreated).")
         except Exception as e:
             print(f"Failed to restore state: {e}")
+
+    def _update_fundamental_data(self):
+        """
+        Fetches and caches fundamental data from FinancialDatasets.ai.
+        Called hourly for stock symbols. Runs in background thread.
+        """
+        # Prevent concurrent updates
+        if getattr(self, '_fundamental_update_in_progress', False):
+            print("Arena: Fundamental update already in progress, skipping...")
+            return
+
+        self._fundamental_update_in_progress = True
+
+        try:
+            import time
+            self.last_fundamental_update = time.time()
+
+            # Only fetch for stock symbols (crypto doesn't have fundamental data)
+            # Skip if market is closed to save API calls
+            if not self.data_feed.is_stock_market_open():
+                print("Arena: Stock market closed - skipping fundamental data update to save API calls")
+                return
+
+            stock_symbols = getattr(self.data_feed, 'stock_symbols', [])
+            if not stock_symbols:
+                return
+
+            print(f"Arena: Updating fundamental data for {len(stock_symbols)} stocks...")
+            updated_count = 0
+
+            for sym in stock_symbols:
+                try:
+                    fund_data = self.data_feed.get_fundamental_data(sym)
+                    if fund_data:
+                        self.fundamental_cache[sym] = fund_data
+                        updated_count += 1
+                except Exception as e:
+                    print(f"Arena: Fundamental update error for {sym}: {e}")
+
+            print(f"Arena: Fundamental data updated for {updated_count} stocks")
+        finally:
+            self._fundamental_update_in_progress = False
 
     def load_agent(self, name, restore=False, reload_module=False):
         filepath = os.path.join(self.agent_dir, f"{name}.py")
@@ -192,8 +277,8 @@ class Arena:
                 if name not in self.agents:
                     self.agents[name] = {
                         'instance': instance,
-                        'equity': 100.0,
-                        'cash': 100.0,
+                        'equity': 10000.0,
+                        'cash': 10000.0,
                         'total_fees': 0.0,
                         'portfolio': {s: 0.0 for s in self.symbols},
                         'roi': 0.0,
@@ -224,8 +309,24 @@ class Arena:
     def _save_agent_state(self, name):
         if self.db is None: return
         data = self.agents[name].copy()
-        del data['instance']
-        self.db.agents.update_one({'name': name}, {'$set': {'name': name, **data}}, upsert=True)
+        if 'instance' in data:
+            del data['instance']
+        
+        update_fields = {'name': name, **data}
+        self.db.agents.update_one({'name': name}, {'$set': update_fields}, upsert=True)
+
+    def save_agent_code(self, name, code):
+        """Saves the agent's source code to the database for persistence."""
+        if self.db is None: return
+        try:
+            self.db.agents.update_one(
+                {'name': name},
+                {'$set': {'code': code}},
+                upsert=True
+            )
+            print(f"Arena: Saved code for {name} to DB.")
+        except Exception as e:
+            print(f"Arena: Error saving code for {name} to DB: {e}")
 
     def start_loop(self):
         if self.running: return
@@ -283,6 +384,11 @@ class Arena:
                         print(f"Arena: Success! Hot-swapping {name}...")
                         # 5. Hot-Swap
                         self.load_agent(name, reload_module=True)
+                        
+                        # NEW: Persist evolved code
+                        if "code" in result:
+                            self.save_agent_code(name, result["code"])
+                            
                         print(f"Arena: Hot-swap complete for {name}")
                         self.socketio.emit('agent_deployed', {'name': name})
         except Exception as e:
@@ -311,7 +417,7 @@ class Arena:
             except: pass
             
         start_time = datetime.now().timestamp() * 1000
-        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 100.0 for n in default_agents}}
+        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 10000.0 for n in default_agents}}
         self.chart_history.append(initial)
         if self.db is not None: self.db.chart_history.insert_one(initial.copy())
         
@@ -335,8 +441,8 @@ class Arena:
         # 2. Reset Agents
         for name in self.agents:
             self.agents[name].update({
-                'equity': 100.0,
-                'cash': 100.0,
+                'equity': 10000.0,
+                'cash': 10000.0,
                 'total_fees': 0.0,
                 'portfolio': {s: 0.0 for s in self.symbols},
                 'roi': 0.0,
@@ -360,7 +466,7 @@ class Arena:
 
         # 4. Re-init Chart
         start_time = datetime.now().timestamp() * 1000
-        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 100.0 for n in self.agents.keys()}}
+        initial = {'timestamp': start_time, 'price': 0, 'agents': {n: 10000.0 for n in self.agents.keys()}}
         self.chart_history.append(initial)
         if self.db is not None: self.db.chart_history.insert_one(initial.copy())
         
@@ -510,7 +616,7 @@ class Arena:
             
             # 2. Update Attention (Google Trends) - cached hourly
             try:
-                self.attention_cache = self.attention_feed.get_attention(['BTC', 'ETH', 'SOL'])
+                self.attention_cache = self.attention_feed.get_attention(['BTC', 'ETH', 'SOL', 'BNB'])
             except Exception:
                 pass  # Keep existing cache on error
 
@@ -578,28 +684,45 @@ class Arena:
                         # print(f"Calc Metrics Error {sym}: {e}")
                         pass
 
+                # Get fundamental data from cache (for stocks)
+                fund_data = self.fundamental_cache.get(sym, {})
+
                 market_data[sym] = {
                     'price': price,
                     'volume': tick_data.get('volume', 0),
                     'history': history_prices,
-                    'prices': history_prices, 
-                    'price_history': history_prices, 
+                    'prices': history_prices,
+                    'price_history': history_prices,
                     'volumes': [h['volume'] for h in hist],
                     'timestamps': [h['timestamp'] for h in hist],
-                    
-                    # --- NEW ALPHA SIGNALS (INSTITUTIONAL GRADE) ---
-                    'obi_weighted': obi,          # Renaming for consistency with brain
+
+                    # --- MICROSTRUCTURE ALPHA SIGNALS ---
+                    'obi_weighted': obi,          # Order Book Imbalance
                     'micro_price': micro_price,   # Stoikov Fair Value
                     'sentiment': sentiment_score, # Sentiment
                     'ofi': (taker_ratio - 1.0) * 100, # Approx OFI from ratio
-                    
+
                     'funding_rate_velocity': funding_vel,
                     'cvd_divergence': cvd_score,
                     'taker_ratio': taker_ratio,
                     'parkinson_vol': parkinson_vol,
                     'attention': self.attention_cache.get(sym, 0.0),  # Google Trends
 
-                    'order_book': { 
+                    # --- FUNDAMENTAL ALPHA SIGNALS (FinancialDatasets.ai) ---
+                    'insider_sentiment': fund_data.get('insider_sentiment'),
+                    'institutional_change': fund_data.get('institutional_change'),
+                    'revenue_growth': fund_data.get('financial_metrics', {}).get('revenue_growth'),
+                    'profit_margin': fund_data.get('financial_metrics', {}).get('profit_margin'),
+                    'pe_ratio': fund_data.get('financial_metrics', {}).get('pe_ratio'),
+                    'earnings_surprise': fund_data.get('financial_metrics', {}).get('earnings_surprise'),
+                    'earnings_surprise': fund_data.get('financial_metrics', {}).get('earnings_surprise'),
+                    'news_sentiment_score': fund_data.get('news_sentiment'),
+                    # --- NEW FUNDAMENTAL DATA ---
+                    'segmented_revenues': fund_data.get('segmented_financials'),
+                    'latest_filings': fund_data.get('sec_filings'),
+                    'data_source': tick_data.get('data_source', 'fallback'),
+
+                    'order_book': {
                         'bids': tick_data.get('bids', []),
                         'asks': tick_data.get('asks', [])
                     }
@@ -629,7 +752,16 @@ class Arena:
                     
                 except Exception as e:
                     print(f"Arena: Analyst Engine error: {e}")
-            
+
+            # ===== FUNDAMENTAL DATA UPDATE (Every hour for stocks - ONLY when market open) =====
+            if (current_ts - self.last_fundamental_update) >= self.fundamental_interval:
+                # Only fetch if market is open to save API calls
+                if self.data_feed.is_stock_market_open():
+                    # Update timestamp first to prevent overlapping updates
+                    self.last_fundamental_update = current_ts
+                    # Run in background to avoid blocking the main loop
+                    threading.Thread(target=self._update_fundamental_data, daemon=True).start()
+
             # Broadcast
             # Determine Benchmark Price (BTC for Crypto, SPY or First for Stocks)
             benchmark_sym = 'BTC' if 'BTC' in self.symbols else ('SPY' if 'SPY' in self.symbols else self.symbols[0])
@@ -727,7 +859,10 @@ class Arena:
 
                     # Execute (Safe now)
                     executed, fee = self._execute_order(name, data, decision, symbol, quantity, tickers)
-                    
+
+                    # Store last decision for leaderboard
+                    data['last_decision'] = f"{decision} {symbol if symbol else ''}".strip()
+
                     if executed and decision in ["BUY", "SELL"]:
                         self.socketio.emit('trade_log', {
                             'agent': name,
@@ -747,14 +882,12 @@ class Arena:
                     price = tickers.get(sym, {}).get('price', 0)
                     equity += qty * price
                 
-                data['equity'] = equity
-                data['roi'] = ((equity - 100) / 100) * 100
-                
                 # === FIX #2: Increased cash-out threshold to beat transaction costs ===
-                # Old: 0.125% was less than fees (0.075% + slippage = ~0.15% round trip)
-                # New: 0.50% ensures positive expectancy after costs
                 CASHOUT_THRESHOLD = 0.50  # 0.50% ROI (Realistic Scalping Target)
-                STARTING_EQUITY = 100.0
+                STARTING_EQUITY = 10000.0 # Increased to $10k for High Value Trades
+
+                data['equity'] = equity
+                data['roi'] = ((equity - STARTING_EQUITY) / STARTING_EQUITY) * 100
                 
                 if data['roi'] >= CASHOUT_THRESHOLD:
                     profit = equity - STARTING_EQUITY
@@ -906,8 +1039,8 @@ class Arena:
         
         # === FIX #2: Realistic fee structure ===
         # Binance VIP0: 0.1% maker, 0.1% taker -> avg 0.075% with BNB discount
-        # Old: 0.01% was unrealistically low
-        fee_rate = 0.00075  # 0.075% fee (Realistic tier)
+        # Using 0.05% as nominal fee (competitive exchange rate)
+        fee_rate = 0.0005  # 0.05% per trade
         
         # Simulate execution slippage (0.01% - 0.05% adverse price movement)
         slippage = np.random.uniform(0.0001, 0.0005)

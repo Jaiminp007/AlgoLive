@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: algoclash-backend
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
+    startCommand: cd backend && gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT --timeout 120 app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: PORT
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: FINANCIAL_DATASETS_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        sync: false
+      - key: ASSET_CLASS
+        value: "CRYPTO"
+      - key: ENABLE_SEMANTIC_ALPHA
+        value: "true"
+    healthCheckPath: /health
