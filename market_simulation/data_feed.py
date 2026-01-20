@@ -94,9 +94,16 @@ class DataFeed:
 
         # --- INIT BINANCE (CRYPTO - FALLBACK) ---
         print(f"DataFeed: Initializing Crypto via Binance (fallback): {self.crypto_symbols}")
-        self.exchange = ccxt.binance({
-            'enableRateLimit': True,
-        })
+        try:
+            self.exchange = ccxt.binance({
+                'enableRateLimit': True,
+            })
+            # Test connection
+            self.exchange.load_markets()
+            print("DataFeed: Binance initialized successfully")
+        except Exception as e:
+            print(f"DataFeed: Binance unavailable ({e}), will use CoinGecko fallback")
+            self.exchange = None
 
     def is_stock_market_open(self) -> bool:
         """
@@ -278,32 +285,42 @@ class DataFeed:
                 "market_status": snapshot["SPY"].get('market_status', 'closed')
             }
 
-        # --- FETCH CRYPTO (COINBASE - always use for real-time) ---
+        # --- FETCH CRYPTO (BINANCE/COINGECKO - always use for real-time) ---
         # Note: Crypto APIs are free, always fetch live data
         try:
-            tickers = self.exchange.fetch_tickers(self.crypto_symbols)
+            if self.exchange:
+                # Try Binance first
+                tickers = self.exchange.fetch_tickers(self.crypto_symbols)
 
-            for pair, data in tickers.items():
-                short_name = self.crypto_map.get(pair)
-                if not short_name:
-                    continue
+                for pair, data in tickers.items():
+                    short_name = self.crypto_map.get(pair)
+                    if not short_name:
+                        continue
 
-                snapshot[short_name] = {
-                    "price": float(data['last']),
-                    "volume": float(data['baseVolume']),
-                    "high": float(data['high'] or data['last']),
-                    "low": float(data['low'] or data['last']),
-                    "open": float(data['open'] or data['last']),
-                    "bid": float(data['bid'] or 0),
-                    "ask": float(data['ask'] or 0),
-                    "timestamp": timestamp,
-                    "bids": [],
-                    "asks": [],
-                    "data_source": "coinbase",
-                    "market_status": "open"  # Crypto is always open
-                }
+                    snapshot[short_name] = {
+                        "price": float(data['last']),
+                        "volume": float(data['baseVolume']),
+                        "high": float(data['high'] or data['last']),
+                        "low": float(data['low'] or data['last']),
+                        "open": float(data['open'] or data['last']),
+                        "bid": float(data['bid'] or 0),
+                        "ask": float(data['ask'] or 0),
+                        "timestamp": timestamp,
+                        "bids": [],
+                        "asks": [],
+                        "data_source": "binance",
+                        "market_status": "open"  # Crypto is always open
+                    }
+            else:
+                # Fallback to CoinGecko (no auth required, free tier)
+                self._fetch_crypto_from_coingecko(snapshot, timestamp)
         except Exception as e:
             print(f"Crypto Fetch Error: {e}")
+            # Try CoinGecko fallback
+            try:
+                self._fetch_crypto_from_coingecko(snapshot, timestamp)
+            except Exception as e2:
+                print(f"CoinGecko Fallback Error: {e2}")
         
         # Add global market status flag for frontend
         snapshot['_market_status'] = 'open' if stock_market_open else 'closed'
@@ -311,6 +328,59 @@ class DataFeed:
                 
         return snapshot
 
+    def _fetch_crypto_from_coingecko(self, snapshot, timestamp):
+        """
+        Fallback method to fetch crypto prices from CoinGecko (no auth required).
+        Used when Binance is blocked or unavailable.
+        """
+        import requests
+        
+        # CoinGecko API (free tier, no auth)
+        coingecko_ids = {
+            'BTC': 'bitcoin',
+            'ETH': 'ethereum',
+            'SOL': 'solana',
+            'BNB': 'binancecoin'
+        }
+        
+        for short_name, gecko_id in coingecko_ids.items():
+            try:
+                url = f"https://api.coingecko.com/api/v3/simple/price"
+                params = {
+                    'ids': gecko_id,
+                    'vs_currencies': 'usd',
+                    'include_24hr_vol': 'true',
+                    'include_24hr_change': 'true'
+                }
+                response = requests.get(url, params=params, timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json().get(gecko_id, {})
+                    price = data.get('usd', 0)
+                    volume = data.get('usd_24h_vol', 0)
+                    change = data.get('usd_24h_change', 0)
+                    
+                    # Estimate high/low from change
+                    high = price * (1 + abs(change) / 200) if change > 0 else price
+                    low = price * (1 - abs(change) / 200) if change < 0 else price
+                    open_price = price * (1 - change / 100)
+                    
+                    snapshot[short_name] = {
+                        "price": float(price),
+                        "volume": float(volume),
+                        "high": float(high),
+                        "low": float(low),
+                        "open": float(open_price),
+                        "bid": float(price * 0.9999),  # Estimated
+                        "ask": float(price * 1.0001),  # Estimated
+                        "timestamp": timestamp,
+                        "bids": [],
+                        "asks": [],
+                        "data_source": "coingecko",
+                        "market_status": "open"
+                    }
+            except Exception as e:
+                print(f"CoinGecko fetch failed for {short_name}: {e}")
 
     def get_historical_data(self, limit=100, timeframe='1Min'):
         """
@@ -401,28 +471,33 @@ class DataFeed:
         except Exception as e:
             print(f"yfinance History Error: {e}")
             
-        # --- CRYPTO HISTORY (COINBASE) ---
+        # --- CRYPTO HISTORY (BINANCE/COINGECKO) ---
         try:
-            tf = '1m' # CCXT default
-            for pair in self.crypto_symbols:
-                short_name = self.crypto_map[pair]
-                try:
-                    ohlcv = self.exchange.fetch_ohlcv(pair, timeframe=tf, limit=limit)
-                    
-                    data = []
-                    for candle in ohlcv:
-                        data.append({
-                            'timestamp': candle[0],
-                            'open': candle[1],
-                            'high': candle[2],
-                            'low': candle[3],
-                            'close': candle[4],
-                            'volume': candle[5]
-                        })
-                    all_history[short_name] = data
-                    time.sleep(0.1) # Rate limit
-                except Exception as e:
-                    print(f"Error fetching history for {pair}: {e}")
+            if self.exchange:
+                # Use Binance if available
+                tf = '1m' # CCXT default
+                for pair in self.crypto_symbols:
+                    short_name = self.crypto_map[pair]
+                    try:
+                        ohlcv = self.exchange.fetch_ohlcv(pair, timeframe=tf, limit=limit)
+                        
+                        data = []
+                        for candle in ohlcv:
+                            data.append({
+                                'timestamp': candle[0],
+                                'open': candle[1],
+                                'high': candle[2],
+                                'low': candle[3],
+                                'close': candle[4],
+                                'volume': candle[5]
+                            })
+                        all_history[short_name] = data
+                        time.sleep(0.1) # Rate limit
+                    except Exception as e:
+                        print(f"Error fetching history for {pair}: {e}")
+            else:
+                # Fallback: Use current CoinGecko prices as history
+                print("DataFeed: Using live prices for crypto history (Binance unavailable)")
         except Exception as e:
             print(f"Crypto History Error: {e}")
                 

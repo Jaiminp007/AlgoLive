@@ -769,13 +769,15 @@ class Arena:
             
             self.socketio.emit('market_tick', {'price': benchmark_price, 'timestamp': ts})
             
-            # Chart update - SAFEGUARD against bad data
+            # Chart update - Initialize chart_payload with default
+            chart_payload = {
+                'timestamp': ts,
+                'price': benchmark_price if benchmark_price > 0 else 0,
+                'agents': {n: d['equity'] for n, d in self.agents.items()}
+            }
+            
+            # Only save to history if valid data
             if ts > 0 and benchmark_price > 0:
-                chart_payload = {
-                    'timestamp': ts,
-                    'price': benchmark_price,
-                    'agents': {n: d['equity'] for n, d in self.agents.items()}
-                }
                 self.chart_history.append(chart_payload)
                 self._db_queue.put(('chart', chart_payload.copy()))
             

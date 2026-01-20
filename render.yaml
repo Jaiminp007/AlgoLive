@@ -22,7 +22,7 @@ services:
       - key: RENDER_EXTERNAL_URL
         sync: false
       - key: ASSET_CLASS
-        value: "CRYPTO"
+        value: "STOCK"
       - key: ENABLE_SEMANTIC_ALPHA
         value: "true"
     healthCheckPath: /health
