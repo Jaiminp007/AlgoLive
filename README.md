@@ -4,6 +4,8 @@
 
 AlgoClash Live is a real-time AI trading simulation platform where Large Language Model (LLM) generated trading agents compete against each other using live cryptocurrency and stock market data. Watch as AI agents analyze market microstructure, execute trades, and evolve their strategies in real-time.
 
+![AlgoClash Live Dashboard](assets/G_IlXQGXUAA5_AA.jpeg)
+
 ---
 
 ## Table of Contents
@@ -55,13 +57,13 @@ AlgoClash Live is a real-time AI trading simulation platform where Large Languag
 
 AlgoClash Live enables you to:
 
-- **Generate AI Trading Agents** using various LLM models (GPT-4o, Claude, DeepSeek, Llama, etc.)
-- **Research Strategies** using an interactive terminal with Python execution sandbox
-- **Watch Live Competition** as agents trade crypto and stocks in real-time
-- **Analyze Performance** with live equity curves, trade logs, and leaderboards
-- **Deploy Custom Algorithms** directly to the arena
+- Generate AI Trading Agents using various LLM models (GPT-4o, Claude, DeepSeek, Llama, etc.)
+- Research Strategies using an interactive terminal with Python execution sandbox
+- Watch Live Competition as agents trade crypto and stocks in real-time
+- Analyze Performance with live equity curves, trade logs, and leaderboards
+- Deploy Custom Algorithms directly to the arena
 
-The platform fetches live market data every second from **Binance via CCXT** (crypto) and **FinancialDatasets.ai / Yahoo Finance** (stocks when markets are open, cached otherwise), enriches it with market microstructure and sentiment signals, and executes agent strategies in a simulated trading environment with realistic transaction costs.
+The platform fetches live market data every second from Binance via CCXT (crypto) and FinancialDatasets.ai / Yahoo Finance (stocks when markets are open, cached otherwise), enriches it with market microstructure and sentiment signals, and executes agent strategies in a simulated trading environment with realistic transaction costs.
 
 ---
 
@@ -85,7 +87,7 @@ Trade across multiple asset classes simultaneously:
 
 ### Command-Based Sandbox Research Terminal
 
-The revolutionary **Sandbox Research Terminal** allows you to develop trading algorithms through natural language commands:
+The Sandbox Research Terminal allows you to develop trading algorithms through natural language commands:
 
 | Command | Purpose | Example |
 |---------|---------|---------|
@@ -97,11 +99,11 @@ The revolutionary **Sandbox Research Terminal** allows you to develop trading al
 | `/deploy` | Deploy to live arena | `/deploy` |
 
 **Key Benefits:**
-- **Natural Language Interface**: Describe what you want in plain English
-- **Structured Workflow**: Plan -> Research -> Build -> Deploy
-- **Code Execution**: Live Python sandbox with E2B for safe execution
-- **Auto-Validation**: Algorithms validated before deployment with auto-repair
-- **Multi-Turn Research**: Iterative exploration of financial data
+- Natural Language Interface: Describe what you want in plain English
+- Structured Workflow: Plan -> Research -> Build -> Deploy
+- Code Execution: Live Python sandbox with E2B for safe execution
+- Auto-Validation: Algorithms validated before deployment with auto-repair
+- Multi-Turn Research: Iterative exploration of financial data
 
 ### LLM-Powered Agent Generation
 
@@ -314,7 +316,7 @@ Open `http://localhost:5173` in your browser.
 
 ## Sandbox Research Terminal
 
-The **Sandbox Research Terminal** is a revolutionary feature that lets you develop trading algorithms through natural language commands. Instead of writing code directly, you describe what you want to research, and an LLM agent explores financial data, discovers patterns, and builds algorithms for you.
+The Sandbox Research Terminal lets you develop trading algorithms through natural language commands. Instead of writing code directly, you describe what you want to research, and an LLM agent explores financial data, discovers patterns, and builds algorithms for you.
 
 ### Command-Based Workflow
 
@@ -387,7 +389,7 @@ Let's walk through a complete research workflow to find correlations between Pal
 $ /plan Find correlation between PLTR and tensions between US and Venezuela
 
 # Agent creates a structured plan:
-📋 Research Plan:
+Research Plan:
 1. Fetch historical price data for PLTR (2022-2026)
 2. Fetch news data for Venezuela-related events
 3. Fetch insider trading data for PLTR
@@ -398,13 +400,13 @@ $ /plan Find correlation between PLTR and tensions between US and Venezuela
 $ /approve
 
 # Agent executes research:
-🧠 Executing research plan...
-✓ Fetched 1,460 price data points for PLTR
-✓ Analyzed 127 news articles mentioning Venezuela
-✓ Found 43 insider trades in the period
-✓ Computed correlations and event impacts
+Executing research plan...
+- Fetched 1,460 price data points for PLTR
+- Analyzed 127 news articles mentioning Venezuela
+- Found 43 insider trades in the period
+- Computed correlations and event impacts
 
-📊 Research Findings:
+Research Findings:
 - PLTR price shows 0.64 correlation with defense sector during geopolitical events
 - Significant price movement (+3.2% avg) within 48 hours of Venezuela-US tension news
 - Insider buying activity increases 2 weeks before major defense contracts
@@ -414,9 +416,9 @@ $ /approve
 $ /build
 
 # Agent generates algorithm:
-🧠 Building algorithm based on research findings...
+Building algorithm based on research findings...
 
-✓ Algorithm created: Agent_sandbox_pltr_defense_correlation
+Algorithm created: Agent_sandbox_pltr_defense_correlation
 Strategy: Momentum + News Sentiment + Defense Sector Correlation
 - Buy when: PLTR > defense sector momentum AND positive news sentiment
 - Sell when: Stop-loss (-0.3%) OR take-profit (+0.5%)
@@ -426,7 +428,7 @@ Strategy: Momentum + News Sentiment + Defense Sector Correlation
 $ /backtest --period 6m --initial 10000
 
 # Results displayed:
-📈 Backtest Results (6 months):
+Backtest Results (6 months):
 ROI: +18.3%
 Win Rate: 64.2%
 Sharpe Ratio: 1.82
@@ -436,9 +438,9 @@ Total Trades: 47
 # Step 5: Deploy to arena
 $ /deploy
 
-✓ Algorithm deployed to arena as: Agent_sandbox_pltr_defense_correlation
-✓ Now competing with 6 other agents
-→ View performance at http://localhost:5173/dashboard
+Algorithm deployed to arena as: Agent_sandbox_pltr_defense_correlation
+Now competing with 6 other agents
+View performance at http://localhost:5173/dashboard
 ```
 
 ### Agent Validation and Auto-Repair
@@ -671,7 +673,7 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
 
 ### Agent State Management
 
-**IMPORTANT**: Do NOT use Python globals for state. Use `agent_state['custom']`:
+**IMPORTANT:** Do NOT use Python globals for state. Use `agent_state['custom']`:
 
 ```python
 # WRONG - Global state (not persistent across restarts)
@@ -1240,11 +1242,11 @@ This project is licensed under the MIT License. See LICENSE file for details.
 
 ## Acknowledgments
 
-- **CCXT** - Cryptocurrency exchange integration
-- **FinancialDatasets.ai** - Premium stock market data
-- **E2B** - Secure Python sandbox execution
-- **OpenRouter** - Multi-model LLM access
-- **GitHub AI** - AI model inference platform
+- CCXT - Cryptocurrency exchange integration
+- FinancialDatasets.ai - Premium stock market data
+- E2B - Secure Python sandbox execution
+- OpenRouter - Multi-model LLM access
+- GitHub AI - AI model inference platform
 
 ---
 
