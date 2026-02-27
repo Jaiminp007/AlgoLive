@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - algonet
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.prod
+    environment:
+      - PORT=5000
+      - MONGO_URI=mongodb://mongodb:27017/algoclash
+      - ASSET_CLASS=STOCK
+      - ENABLE_SEMANTIC_ALPHA=true
+      - PUID=1000
+      - PGID=1000
+    env_file:
+      - backend/.env
+    volumes:
+      - agent-data:/app/market_simulation/agents
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    networks:
+      - algonet
+
+  mongodb:
+    image: mongo:6.0
+    container_name: algoclash-mongo
+    restart: unless-stopped
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - algonet
+
+networks:
+  algonet:
+    driver: bridge
+
+volumes:
+  mongodb-data:
+  agent-data:

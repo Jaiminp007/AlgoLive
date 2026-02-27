@@ -76,11 +76,12 @@ class SandboxSession:
             return False
 
         try:
-            # Create sandbox with API key explicitly passed
-            self.sandbox = Sandbox(
-                api_key=e2b_api_key,
-                timeout=300,  # 5 minute sandbox lifetime
-            )
+            print(f"SandboxSession: Creating E2B sandbox with key: {e2b_api_key[:10]}...")
+            # Set API key via environment variable (newer E2B SDK requirement)
+            os.environ['E2B_API_KEY'] = e2b_api_key
+            # Create sandbox using the new API (Sandbox.create() instead of constructor)
+            self.sandbox = Sandbox.create(timeout=300)  # 5 minute sandbox lifetime
+            print(f"SandboxSession: Sandbox object created successfully")
 
             # Install required packages
             print(f"SandboxSession {self.session_id}: Installing packages...")
@@ -104,19 +105,83 @@ print("Packages installed successfully")
 
             # Set up environment in the sandbox
             api_key = os.getenv('FINANCIAL_DATASETS_API_KEY', '')
+            # Get backend URL for web search (defaults to localhost for local dev)
+            backend_url = os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:5000')
+
             setup_result = self.sandbox.run_code(f"""
 import os
 os.environ['FINANCIAL_DATASETS_API_KEY'] = '{api_key}'
 os.environ['BASE_URL'] = 'https://api.financialdatasets.ai'
+os.environ['BACKEND_URL'] = '{backend_url}'
 print("Environment configured")
 """)
+
+            # Inject web_search() helper function
+            web_search_code = '''
+import requests as _requests
+
+def web_search(query: str) -> list:
+    """
+    Search the web for market insights, news, and analyst opinions.
+
+    This function calls the backend search API which uses Tavily AI search.
+
+    Args:
+        query: Search query string (e.g., "NVDA earnings forecast 2026")
+
+    Returns:
+        List of search results, each with:
+        - title: Result title
+        - url: Source URL
+        - content: Snippet of content (max 500 chars)
+        - score: Relevance score (0-1)
+
+    Example:
+        >>> results = web_search("Tesla stock price forecast 2026")
+        >>> for r in results:
+        ...     print(f"{r['title']}: {r['content'][:100]}...")
+
+    Tips:
+        - Be specific with queries for better results
+        - Include dates for recent news (e.g., "January 2026")
+        - Use for: news validation, analyst opinions, market events
+    """
+    import os
+    backend_url = os.environ.get('BACKEND_URL', 'http://localhost:5000')
+
+    try:
+        response = _requests.post(
+            f"{backend_url}/sandbox/search",
+            json={"query": query},
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(f"Search error: {response.status_code} - {response.text}")
+            return []
+
+        data = response.json()
+        results = data.get('results', [])
+
+        print(f"Found {len(results)} results for: {query}")
+        return results
+
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
+
+print("web_search() helper function loaded")
+'''
+            self.sandbox.run_code(web_search_code)
 
             self.status = "active"
             print(f"SandboxSession {self.session_id}: Sandbox created successfully")
             return True
 
         except Exception as e:
+            import traceback
             print(f"SandboxSession: Failed to create sandbox: {e}")
+            traceback.print_exc()
             self.status = "error"
             return False
 
@@ -394,7 +459,16 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
 
         # Check if response contains final execute_strategy function
         is_final, final_code = self._check_for_final_strategy(response_content)
-        if is_final:
+
+        # AUTO-REPAIR LOOP: If final strategy detected, validate and fix if needed
+        if is_final and final_code:
+            final_code, validation_error = self._validate_and_repair_strategy(
+                session, final_code, max_retries=3
+            )
+            if validation_error:
+                # Still has errors after retries - include error in response
+                parsed["clean_response"] += f"\n\n⚠️ **Validation Warning**: {validation_error}"
+
             session.final_code = final_code
 
         return {
@@ -821,6 +895,104 @@ Return ONLY the fixed complete Python code block.
                 result_str += f"Error:\n{block['error']}\n"
             results.append(result_str)
         return "\n".join(results)
+
+    def _validate_and_repair_strategy(self, session: SandboxSession, code: str, max_retries: int = 3) -> Tuple[str, Optional[str]]:
+        """
+        Validate strategy code and auto-repair using LLM if needed.
+
+        Args:
+            session: The sandbox session (for LLM calls)
+            code: The strategy code to validate
+            max_retries: Maximum repair attempts
+
+        Returns:
+            Tuple of (fixed_code, remaining_error_or_None)
+        """
+        attempt = 0
+        validation_error = None
+
+        while attempt < max_retries:
+            print(f"[SandboxAgent] Auto-repair validation attempt {attempt + 1}/{max_retries}")
+
+            if self.socketio:
+                self.socketio.emit('sandbox_log', {
+                    'session_id': session.session_id,
+                    'type': 'thinking',
+                    'message': f"Validating algorithm (attempt {attempt + 1}/{max_retries})..."
+                })
+
+            # A. Static Validation
+            static_val = self._validate_strategy_code(code)
+            if not static_val["valid"]:
+                validation_error = f"Syntax Error: {static_val['errors'][0]}"
+                print(f"[SandboxAgent] Static validation failed: {validation_error}")
+            else:
+                # B. Runtime Validation
+                runtime_val = self._validate_runtime_safety(code)
+                if not runtime_val["valid"]:
+                    validation_error = f"Runtime Error: {runtime_val['error']}"
+                    print(f"[SandboxAgent] Runtime validation failed: {validation_error}")
+                else:
+                    # Success!
+                    print("[SandboxAgent] Code passed all validations!")
+                    if self.socketio:
+                        self.socketio.emit('sandbox_log', {
+                            'session_id': session.session_id,
+                            'type': 'success',
+                            'message': "Algorithm passed all safety checks ✓"
+                        })
+                    return code, None  # No error
+
+            # C. Attempt Repair
+            attempt += 1
+            if attempt < max_retries:
+                print(f"[SandboxAgent] Sending error to LLM for auto-repair...")
+                if self.socketio:
+                    self.socketio.emit('sandbox_log', {
+                        'session_id': session.session_id,
+                        'type': 'error',
+                        'message': f"Bug detected: {validation_error}. Auto-fixing..."
+                    })
+
+                repair_prompt = f"""
+Your algorithm has a bug that causes this error:
+**{validation_error}**
+
+The buggy code:
+```python
+{code}
+```
+
+Please fix the code. Common issues:
+1. Return statement should be ONLY the tuple: `return ("HOLD", "BTC", 0)` - NOT `return ("HOLD", "BTC", 0), agent_state`
+2. Use `agent_state.get('custom', {{}})` for custom state - don't reassign agent_state itself
+3. Handle None values: `data.get('key', 0) or 0`
+4. Check if data exists before using: `if symbol_data and 'price' in symbol_data:`
+
+Return ONLY the complete fixed Python code block with the execute_strategy function.
+"""
+                # Add repair request to history
+                session.message_history.append({"role": "user", "content": repair_prompt})
+
+                try:
+                    response = self._call_llm(session)
+                    session.message_history.append({"role": "assistant", "content": response})
+
+                    # Extract fixed code
+                    code_blocks = self._extract_code_blocks(response)
+                    if code_blocks:
+                        code = code_blocks[-1]  # Take the last code block
+                        print("[SandboxAgent] LLM provided fixed code, re-validating...")
+                    else:
+                        print("[SandboxAgent] LLM did not provide code block in repair response")
+                        break
+                except Exception as e:
+                    print(f"[SandboxAgent] Auto-repair LLM call failed: {e}")
+                    break
+
+        # Max retries reached with errors remaining
+        print(f"[SandboxAgent] Auto-repair exhausted after {attempt} attempts. Last error: {validation_error}")
+        return code, validation_error
 
     def _check_for_final_strategy(self, response: str) -> Tuple[bool, Optional[str]]:
         """Check if response contains complete execute_strategy function."""

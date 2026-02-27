@@ -145,7 +145,7 @@ body {
 .dashboard-grid {
     display: grid;
     grid-template-columns: 2fr 1fr;
-    grid-template-rows: auto auto 1fr 1fr;
+    grid-template-rows: auto auto auto 1fr;
     gap: 16px;
     padding: 16px;
     min-height: 100vh;

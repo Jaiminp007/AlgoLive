@@ -5,6 +5,7 @@ from pymongo import MongoClient
 from datetime import datetime
 import os
 import json
+import re
 import threading
 import time
 import requests as http_requests
@@ -83,6 +84,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analyst_engine.brain import Brain
 from analyst_engine.sandbox_agent import SandboxAgent, get_sandbox_agent
 from market_simulation.arena import Arena
+from market_simulation.backtest_engine import get_backtest_engine
 
 # Agents to auto-load on start/reset
 default_agents = [
@@ -342,6 +344,53 @@ def deploy_agent():
         return jsonify({'status': 'deployed', 'name': name})
     else:
         return jsonify({'error': 'Failed to load agent'}), 400
+
+@app.route('/deploy_custom_agent', methods=['POST'])
+def deploy_custom_agent():
+    """Deploy a custom agent from pasted code (no LLM generation)."""
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    code = data.get('code', '').strip()
+
+    if not name:
+        return jsonify({'success': False, 'error': 'Agent name is required'}), 400
+    if not code:
+        return jsonify({'success': False, 'error': 'Code is required'}), 400
+
+    # Sanitize name: prefix with Agent_ if needed, strip unsafe chars
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    if not safe_name.startswith('Agent_'):
+        safe_name = f'Agent_{safe_name}'
+
+    # Validate code using Brain's validator
+    if not brain._validate_code(code, safe_name):
+        # Provide more specific error
+        try:
+            import ast as _ast
+            _ast.parse(code)
+            error_msg = 'Code must define execute_strategy(market_data, tick, cash_balance, portfolio, ...) with 4-6 parameters, and must not import os/sys/subprocess/requests.'
+        except SyntaxError as e:
+            error_msg = f'Syntax error: {e}'
+        return jsonify({'success': False, 'error': error_msg}), 400
+
+    # Write code to agents directory
+    try:
+        filepath = os.path.join(arena.agent_dir, f'{safe_name}.py')
+        with open(filepath, 'w') as f:
+            f.write(code)
+
+        # Persist to DB
+        arena.save_agent_code(safe_name, code)
+
+        # Load into arena
+        success = arena.load_agent(safe_name, reload_module=True)
+        if success:
+            return jsonify({'success': True, 'name': safe_name})
+        else:
+            return jsonify({'success': False, 'error': 'Agent file saved but failed to load into arena'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/stop_agent', methods=['POST'])
 def stop_agent():
@@ -619,6 +668,252 @@ def close_sandbox_session():
         return jsonify(result), 404
 
     return jsonify(result)
+
+
+@app.route('/sandbox/backtest', methods=['POST'])
+def backtest_sandbox_strategy():
+    """
+    Run a backtest on strategy code against historical data.
+
+    Request JSON:
+        {
+            "code": "def execute_strategy(...): ...",
+            "period": "3m",  # 1m, 3m, 6m, 1y
+            "initial": 10000,
+            "symbols": ["BTC", "ETH", "SOL"]  # Optional
+        }
+
+    Response:
+        {
+            "metrics": {
+                "total_return": 12.4,
+                "sharpe_ratio": 1.82,
+                "max_drawdown": 4.2,
+                "win_rate": 58,
+                "total_trades": 45,
+                "profit_factor": 1.65,
+                "avg_trade_pnl": 27.50
+            },
+            "trades": [...],
+            "equity_curve": [...]
+        }
+    """
+    data = request.json or {}
+    code = data.get('code')
+    period = data.get('period', '3m')
+    initial = data.get('initial', 10000)
+    symbols = data.get('symbols')
+
+    if not code:
+        return jsonify({'error': 'code is required'}), 400
+
+    # Validate period
+    valid_periods = ['1m', '3m', '6m', '1y']
+    if period not in valid_periods:
+        return jsonify({'error': f'period must be one of {valid_periods}'}), 400
+
+    # Validate initial capital
+    try:
+        initial = float(initial)
+        if initial < 100 or initial > 1000000:
+            return jsonify({'error': 'initial must be between 100 and 1000000'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'error': 'initial must be a valid number'}), 400
+
+    # Run backtest
+    try:
+        engine = get_backtest_engine()
+        result = engine.run_backtest(
+            strategy_code=code,
+            symbols=symbols,
+            period=period,
+            initial_capital=initial
+        )
+
+        if 'error' in result and result.get('error'):
+            return jsonify({'error': result['error']}), 400
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[BACKTEST] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== WEB SEARCH ENDPOINT ====================
+
+# Simple in-memory cache for search results
+_search_cache = {}
+_search_cache_ttl = 300  # 5 minutes
+
+# Rate limiting (simple in-memory)
+_search_rate_limit = {}
+_search_rate_limit_max = 10  # requests per minute
+
+
+@app.route('/sandbox/search', methods=['POST'])
+def web_search():
+    """
+    Search the web for market insights using Tavily API.
+
+    Request JSON:
+        { "query": "NVDA earnings January 2026" }
+
+    Response:
+        {
+            "results": [
+                {
+                    "title": "...",
+                    "url": "...",
+                    "content": "...",
+                    "score": 0.95
+                }
+            ]
+        }
+    """
+    data = request.json or {}
+    query = data.get('query', '').strip()
+
+    if not query:
+        return jsonify({'error': 'query is required'}), 400
+
+    if len(query) < 3:
+        return jsonify({'error': 'query must be at least 3 characters'}), 400
+
+    if len(query) > 500:
+        return jsonify({'error': 'query must be less than 500 characters'}), 400
+
+    # Check rate limit (simple per-minute limit)
+    client_ip = request.remote_addr or 'unknown'
+    current_minute = int(time.time() / 60)
+    rate_key = f"{client_ip}:{current_minute}"
+
+    if rate_key in _search_rate_limit:
+        if _search_rate_limit[rate_key] >= _search_rate_limit_max:
+            return jsonify({'error': 'Rate limit exceeded (10 requests/minute)'}), 429
+        _search_rate_limit[rate_key] += 1
+    else:
+        # Clean old entries
+        old_keys = [k for k in _search_rate_limit if not k.endswith(f":{current_minute}")]
+        for k in old_keys:
+            del _search_rate_limit[k]
+        _search_rate_limit[rate_key] = 1
+
+    # Check cache
+    cache_key = query.lower()
+    if cache_key in _search_cache:
+        cached_result, cached_time = _search_cache[cache_key]
+        if time.time() - cached_time < _search_cache_ttl:
+            print(f"[SEARCH] Cache hit for: {query[:50]}")
+            return jsonify(cached_result)
+
+    # Get Tavily API key
+    tavily_key = os.getenv('TAVILY_API_KEY')
+    if not tavily_key:
+        # Fallback: Use DuckDuckGo HTML scraping (no API key needed)
+        print(f"[SEARCH] TAVILY_API_KEY not set, using fallback search")
+        try:
+            results = _fallback_web_search(query)
+            return jsonify({'results': results, 'source': 'fallback'})
+        except Exception as e:
+            print(f"[SEARCH] Fallback search error: {e}")
+            return jsonify({'error': 'Search unavailable. Set TAVILY_API_KEY for better results.'}), 503
+
+    # Call Tavily API
+    try:
+        response = http_requests.post(
+            'https://api.tavily.com/search',
+            json={
+                'api_key': tavily_key,
+                'query': query,
+                'search_depth': 'basic',
+                'include_answer': False,
+                'include_raw_content': False,
+                'max_results': 5
+            },
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            print(f"[SEARCH] Tavily API error: {response.status_code} - {response.text}")
+            return jsonify({'error': 'Search API error'}), 502
+
+        tavily_data = response.json()
+        results = []
+
+        for item in tavily_data.get('results', []):
+            results.append({
+                'title': item.get('title', ''),
+                'url': item.get('url', ''),
+                'content': item.get('content', '')[:500],  # Truncate content
+                'score': item.get('score', 0)
+            })
+
+        response_data = {'results': results, 'source': 'tavily'}
+
+        # Cache the result
+        _search_cache[cache_key] = (response_data, time.time())
+
+        print(f"[SEARCH] Found {len(results)} results for: {query[:50]}")
+        return jsonify(response_data)
+
+    except http_requests.Timeout:
+        return jsonify({'error': 'Search request timed out'}), 504
+    except Exception as e:
+        print(f"[SEARCH] Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _fallback_web_search(query: str) -> list:
+    """
+    Fallback search using DuckDuckGo Instant Answer API.
+    No API key required but limited functionality.
+    """
+    try:
+        # DuckDuckGo Instant Answer API (free, no auth)
+        response = http_requests.get(
+            'https://api.duckduckgo.com/',
+            params={
+                'q': query,
+                'format': 'json',
+                'no_html': 1,
+                'skip_disambig': 1
+            },
+            timeout=5
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+        results = []
+
+        # Add abstract if available
+        if data.get('Abstract'):
+            results.append({
+                'title': data.get('Heading', 'Summary'),
+                'url': data.get('AbstractURL', ''),
+                'content': data.get('Abstract', '')[:500],
+                'score': 0.9
+            })
+
+        # Add related topics
+        for topic in data.get('RelatedTopics', [])[:4]:
+            if isinstance(topic, dict) and topic.get('Text'):
+                results.append({
+                    'title': topic.get('Text', '')[:100],
+                    'url': topic.get('FirstURL', ''),
+                    'content': topic.get('Text', '')[:500],
+                    'score': 0.7
+                })
+
+        return results
+
+    except Exception as e:
+        print(f"[SEARCH] Fallback error: {e}")
+        return []
 
 
 # Socket.IO events for sandbox

@@ -14,6 +14,7 @@ from .quant_features import SentimentSignalGenerator, calculate_multilevel_obi, 
 from .market_metrics import CryptoMetrics
 from .supervisor import Supervisor
 from .attention_feed import AttentionFeed
+from .options_flow import get_options_flow_provider
 
 # Analyst Engine imports
 try:
@@ -80,6 +81,15 @@ class Arena:
         self.fundamental_cache = {}  # {symbol: {data}}
         self.last_fundamental_update = 0
         self.fundamental_interval = 3600  # 1 hour
+
+        # NEW SIGNAL PROVIDERS (Options Flow, VIX)
+        self.options_flow_provider = get_options_flow_provider()
+
+        # Cached signals (updated every 5 minutes to avoid rate limits)
+        self.vix_cache = None
+        self.options_sentiment_cache = {}  # {symbol: sentiment}
+        self.last_signals_update = 0
+        self.signals_update_interval = 300  # 5 minutes
 
         # Warmup
         print("Arena: Fetching Market History for Warmup...")
@@ -725,7 +735,17 @@ class Arena:
                     'order_book': {
                         'bids': tick_data.get('bids', []),
                         'asks': tick_data.get('asks', [])
-                    }
+                    },
+
+                    # --- NEW MARKET SIGNALS (VIX, Options Flow) ---
+                    'vix': self.vix_cache.get('value') if self.vix_cache else None,
+                    'vix_signal': self.data_feed.get_vix_signal() if self.vix_cache else 0,
+                    'vix_percentile': self.vix_cache.get('percentile') if self.vix_cache else None,
+
+                    # Options sentiment (stocks only)
+                    'options_sentiment': self.options_sentiment_cache.get(sym) if sym in self.data_feed.stock_symbols else None,
+                    'put_call_ratio': self.options_flow_provider.get_put_call_ratio(sym) if sym in self.data_feed.stock_symbols else None,
+                    'market_options_sentiment': self.options_sentiment_cache.get('MARKET'),
                 }
             
             # ===== ANALYST ENGINE UPDATE (Every 5 minutes) =====
@@ -761,6 +781,26 @@ class Arena:
                     self.last_fundamental_update = current_ts
                     # Run in background to avoid blocking the main loop
                     threading.Thread(target=self._update_fundamental_data, daemon=True).start()
+
+            # ===== NEW MARKET SIGNALS UPDATE (Every 5 minutes) =====
+            if (current_ts - self.last_signals_update) >= self.signals_update_interval:
+                self.last_signals_update = current_ts
+                # Update VIX
+                try:
+                    self.vix_cache = self.data_feed.get_vix()
+                except Exception as e:
+                    print(f"Arena: VIX update error: {e}")
+
+                # Update Options Sentiment (for stocks)
+                try:
+                    for sym in self.data_feed.stock_symbols:
+                        self.options_sentiment_cache[sym] = self.options_flow_provider.get_options_sentiment(sym)
+                    # Also get SPY (market sentiment)
+                    self.options_sentiment_cache['MARKET'] = self.options_flow_provider.get_options_sentiment('SPY')
+                except Exception as e:
+                    print(f"Arena: Options sentiment update error: {e}")
+
+                print(f"Arena: Signal caches updated - VIX: {self.vix_cache.get('value') if self.vix_cache else 'N/A'}")
 
             # Broadcast
             # Determine Benchmark Price (BTC for Crypto, SPY or First for Stocks)
@@ -921,35 +961,71 @@ class Arena:
                     })
 
                 # === FIX #4: Emergency Stop-Loss (Arena Safety Net) ===
-                # If agent is losing badly (-2% from starting equity), force close all positions
+                # IMPROVED: Per-position stop-loss AND account-level circuit breaker
                 # This prevents catastrophic losses when agents fail to manage risk
-                EMERGENCY_STOP_LOSS = -2.0  # -2% account drawdown triggers emergency exit
-                if data['roi'] <= EMERGENCY_STOP_LOSS:
+                
+                # 1. PER-POSITION STOP: Close positions losing more than 1.5%
+                POSITION_STOP_LOSS = -0.015  # -1.5% per position
+                positions_closed = []
+                
+                for sym, qty in list(data['portfolio'].items()):
+                    if qty == 0:
+                        continue
+                    
+                    entry = data.get('entry_prices', {}).get(sym, 0)
+                    current_price = tickers.get(sym, {}).get('price', 0)
+                    
+                    if entry > 0 and current_price > 0:
+                        if qty > 0:  # Long
+                            pos_pnl = (current_price - entry) / entry
+                        else:  # Short
+                            pos_pnl = (entry - current_price) / entry
+                        
+                        if pos_pnl <= POSITION_STOP_LOSS:
+                            # Force close this position
+                            close_value = qty * current_price
+                            data['cash'] += close_value
+                            data['portfolio'][sym] = 0.0
+                            if sym in data.get('entry_prices', {}):
+                                del data['entry_prices'][sym]
+                            positions_closed.append((sym, pos_pnl))
+                
+                if positions_closed:
+                    print(f"🛑 POSITION STOP: {name} closed {len(positions_closed)} losing positions")
+                    # Recalculate equity after closures
+                    equity = data['cash']
+                    for sym, qty in data['portfolio'].items():
+                        price = tickers.get(sym, {}).get('price', 0)
+                        equity += qty * price
+                    data['equity'] = equity
+                    data['roi'] = ((equity - STARTING_EQUITY) / STARTING_EQUITY) * 100
+                
+                # 2. ACCOUNT CIRCUIT BREAKER: At -5%, force full reset
+                CIRCUIT_BREAKER = -5.0  # -5% account drawdown triggers full reset
+                if data['roi'] <= CIRCUIT_BREAKER:
                     loss = STARTING_EQUITY - equity
-                    print(f"🚨 EMERGENCY STOP: {name} hit -{abs(data['roi']):.2f}% drawdown. Closing all positions.")
+                    print(f"🚨 CIRCUIT BREAKER: {name} hit -{abs(data['roi']):.2f}% drawdown. RESETTING account.")
 
                     # Close all positions
                     for sym, qty in data['portfolio'].items():
                         if qty != 0:
                             price = tickers.get(sym, {}).get('price', 0)
-                            if qty > 0:
-                                data['cash'] += qty * price
-                            else:  # Short position
-                                data['cash'] += qty * price  # qty is negative, so this subtracts
+                            data['cash'] += qty * price
                             data['portfolio'][sym] = 0.0
 
                     # Clear entry prices
                     data['entry_prices'] = {}
+                    
+                    # RESET to starting equity (give agent a fresh start)
+                    data['cash'] = STARTING_EQUITY
+                    data['equity'] = STARTING_EQUITY
+                    data['roi'] = 0.0
 
-                    # Recalculate equity
-                    data['equity'] = data['cash']
-                    data['roi'] = ((data['equity'] - STARTING_EQUITY) / STARTING_EQUITY) * 100
-
-                    # Emit emergency stop event
-                    self.socketio.emit('emergency_stop', {
+                    # Emit circuit breaker event
+                    self.socketio.emit('circuit_breaker', {
                         'agent': name,
                         'loss': loss,
-                        'final_equity': data['equity'],
+                        'reset_equity': STARTING_EQUITY,
                         'timestamp': ts
                     })
 

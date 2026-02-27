@@ -6,6 +6,7 @@ import TradeLog from './TradeLog';
 import StockChart from './StockChart';
 import AgentDetailModal from './AgentDetailModal';
 import NewsFeed from './NewsFeed';
+import DeployCustomAgentModal from './DeployCustomAgentModal';
 
 // Agent colors matching Midnight Terminal palette
 const AGENT_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
@@ -22,6 +23,7 @@ const Dashboard = () => {
     const [notifications, setNotifications] = useState([]);
     const [stockHistory, setStockHistory] = useState({});
     const [selectedAgent, setSelectedAgent] = useState(null);
+    const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
     const [timeRange, setTimeRange] = useState('ALL');
 
     // Market status tabs
@@ -274,6 +276,16 @@ const Dashboard = () => {
                 />
             )}
 
+            {/* Deploy Custom Agent Modal */}
+            {isDeployModalOpen && (
+                <DeployCustomAgentModal
+                    onClose={() => setIsDeployModalOpen(false)}
+                    onSuccess={(name) => {
+                        addNotification(`Custom agent ${name} successfully deployed!`, 'success');
+                    }}
+                />
+            )}
+
             {/* Notifications */}
             <div style={{ position: 'fixed', top: '20px', right: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {notifications.map(n => (
@@ -353,7 +365,7 @@ const Dashboard = () => {
             </div>
 
             {/* Main Chart Area */}
-            <div className="glass-panel" style={{ gridColumn: '1 / 2', gridRow: '3 / 4', padding: '20px', display: 'flex', flexDirection: 'column' }}>
+            <div className="glass-panel" style={{ gridColumn: '1 / 2', gridRow: '3 / 4', padding: '20px', display: 'flex', flexDirection: 'column', height: '616px', maxHeight: '616px' }}>
                 <div className="section-header">
                     <div>
                         <div className="section-title">Agent Equity Comparison</div>
@@ -377,12 +389,36 @@ const Dashboard = () => {
             </div>
 
             {/* Right Sidebar: Active Agents + Recent Trades */}
-            <div style={{ gridColumn: '2 / 3', gridRow: '3 / 4', display: 'flex', flexDirection: 'column', gap: '16px', minHeight: '500px', height: '100%' }}>
+            <div style={{ gridColumn: '2 / 3', gridRow: '3 / 4', display: 'flex', flexDirection: 'column', gap: '16px', alignSelf: 'start' }}>
                 {/* Active Agents */}
                 <div className="glass-panel" style={{ flex: '0 0 auto', padding: '20px', maxHeight: '320px', overflow: 'hidden' }}>
                     <div className="section-header">
                         <div className="section-title">Active Agents</div>
-                        <Link to="/" style={{ color: 'var(--accent-primary)', fontSize: '0.75rem', textDecoration: 'none' }}>+ Add</Link>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                                onClick={() => setIsDeployModalOpen(true)}
+                                style={{
+                                    background: 'rgba(16, 185, 129, 0.1)',
+                                    border: '1px solid #10b981',
+                                    color: '#10b981',
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 'bold',
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = 'rgba(16, 185, 129, 0.2)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = 'rgba(16, 185, 129, 0.1)';
+                                }}
+                            >
+                                Paste Code
+                            </button>
+                            <Link to="/" style={{ color: 'var(--accent-primary)', fontSize: '0.75rem', textDecoration: 'none', display: 'flex', alignItems: 'center' }}>+ Generation</Link>
+                        </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto' }}>
                         {agents.map((agent, index) => {
@@ -475,12 +511,12 @@ const Dashboard = () => {
                 </div>
 
                 {/* Recent Trades */}
-                <div className="glass-panel" style={{ flex: '1 1 auto', minHeight: '280px', padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div className="glass-panel" style={{ flex: '0 0 auto', height: '280px', maxHeight: '280px', padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                     <div className="section-header">
                         <div className="section-title">Recent Trades</div>
                         <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>View All</span>
                     </div>
-                    <div style={{ flex: 1, overflow: 'auto', minHeight: '180px' }}>
+                    <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
                         <TradeLog logs={logs.slice(0, 10)} />
                     </div>
                 </div>

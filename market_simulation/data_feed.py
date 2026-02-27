@@ -297,6 +297,19 @@ class DataFeed:
                     if not short_name:
                         continue
 
+                    # Fetch order book for OBI calculation (top 5 levels)
+                    order_book_bids = []
+                    order_book_asks = []
+                    try:
+                        ob = self.exchange.fetch_order_book(pair, limit=5)
+                        order_book_bids = ob.get('bids', [])[:5]  # [[price, volume], ...]
+                        order_book_asks = ob.get('asks', [])[:5]
+                    except Exception as ob_err:
+                        # Fallback: Use bid/ask from ticker as single level
+                        if data.get('bid') and data.get('ask'):
+                            order_book_bids = [[float(data['bid']), 1.0]]
+                            order_book_asks = [[float(data['ask']), 1.0]]
+
                     snapshot[short_name] = {
                         "price": float(data['last']),
                         "volume": float(data['baseVolume']),
@@ -306,8 +319,8 @@ class DataFeed:
                         "bid": float(data['bid'] or 0),
                         "ask": float(data['ask'] or 0),
                         "timestamp": timestamp,
-                        "bids": [],
-                        "asks": [],
+                        "bids": order_book_bids,
+                        "asks": order_book_asks,
                         "data_source": "binance",
                         "market_status": "open"  # Crypto is always open
                     }
@@ -702,3 +715,144 @@ class DataFeed:
                 'crypto': self.crypto_short_names
             }
         }
+
+    # =========================================================================
+    # VIX (Volatility Index) - Market Fear Gauge
+    # =========================================================================
+
+    _vix_cache = None
+    _vix_cache_time = 0
+    _vix_cache_ttl = 300  # 5 minutes
+
+    def get_vix(self) -> dict:
+        """
+        Get current VIX (CBOE Volatility Index) data.
+
+        The VIX measures market expectations of 30-day volatility.
+        - VIX < 15: Low volatility, complacent market
+        - VIX 15-20: Normal volatility
+        - VIX 20-30: Elevated volatility, cautious market
+        - VIX > 30: High volatility, fear in market
+        - VIX > 40: Extreme fear (crash conditions)
+
+        Returns:
+            Dict with value, change, interpretation, and percentile
+        """
+        current_time = time.time()
+
+        # Check cache
+        if self._vix_cache and (current_time - self._vix_cache_time) < self._vix_cache_ttl:
+            return self._vix_cache
+
+        try:
+            vix_ticker = yf.Ticker('^VIX')
+            data = vix_ticker.history(period='5d', interval='1d')
+
+            if data.empty:
+                return self._get_vix_fallback()
+
+            # Get current and previous values
+            current_vix = float(data['Close'].iloc[-1])
+            prev_vix = float(data['Close'].iloc[-2]) if len(data) > 1 else current_vix
+
+            change = current_vix - prev_vix
+            change_pct = (change / prev_vix * 100) if prev_vix > 0 else 0
+
+            # Calculate VIX percentile (rough estimate based on typical ranges)
+            # Historical VIX: ~10-80, median ~17, mean ~19
+            if current_vix <= 12:
+                percentile = 10
+            elif current_vix <= 15:
+                percentile = 25
+            elif current_vix <= 20:
+                percentile = 50
+            elif current_vix <= 25:
+                percentile = 75
+            elif current_vix <= 30:
+                percentile = 85
+            elif current_vix <= 40:
+                percentile = 95
+            else:
+                percentile = 99
+
+            # Interpretation
+            if current_vix < 15:
+                interpretation = "Low Volatility"
+                signal = "complacent"
+            elif current_vix < 20:
+                interpretation = "Normal"
+                signal = "neutral"
+            elif current_vix < 30:
+                interpretation = "Elevated"
+                signal = "cautious"
+            elif current_vix < 40:
+                interpretation = "High"
+                signal = "fear"
+            else:
+                interpretation = "Extreme"
+                signal = "panic"
+
+            result = {
+                'value': round(current_vix, 2),
+                'change': round(change, 2),
+                'change_pct': round(change_pct, 2),
+                'prev_close': round(prev_vix, 2),
+                'percentile': percentile,
+                'interpretation': interpretation,
+                'signal': signal,
+                'timestamp': current_time
+            }
+
+            # Cache result
+            self._vix_cache = result
+            self._vix_cache_time = current_time
+
+            return result
+
+        except Exception as e:
+            print(f"DataFeed: VIX fetch error: {e}")
+            return self._get_vix_fallback()
+
+    def _get_vix_fallback(self) -> dict:
+        """Return fallback VIX data when fetch fails."""
+        return {
+            'value': 18.0,  # Typical neutral value
+            'change': 0.0,
+            'change_pct': 0.0,
+            'prev_close': 18.0,
+            'percentile': 50,
+            'interpretation': 'Normal',
+            'signal': 'neutral',
+            'timestamp': time.time(),
+            'source': 'fallback'
+        }
+
+    def get_vix_signal(self) -> float:
+        """
+        Get VIX as a normalized signal for trading strategies.
+
+        Returns:
+            Float from -1.0 (extreme fear/high VIX) to 1.0 (complacent/low VIX)
+
+        Interpretation:
+            - Positive: Low VIX, market complacent (contrarian: may signal top)
+            - Negative: High VIX, market fearful (contrarian: may signal bottom)
+        """
+        vix_data = self.get_vix()
+        vix = vix_data.get('value', 18)
+
+        # Normalize VIX to [-1, 1]
+        # VIX=10 -> +1.0 (very low vol, complacent)
+        # VIX=20 -> 0.0 (neutral)
+        # VIX=30+ -> -1.0 (high vol, fear)
+
+        if vix <= 10:
+            return 1.0
+        elif vix >= 30:
+            return -1.0
+        elif vix < 20:
+            # 10-20 maps to 1.0 to 0.0
+            return 1.0 - ((vix - 10) / 10.0)
+        else:
+            # 20-30 maps to 0.0 to -1.0
+            return -((vix - 20) / 10.0)

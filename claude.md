@@ -168,6 +168,20 @@ From `market_data[symbol]`:
 | `news_sentiment_score` | Pre-calculated news sentiment | -1.0 to 1.0 |
 | `data_source` | Data source used | 'financial_datasets' or 'fallback' |
 
+**Market Volatility Signals (All Assets):**
+| Signal | Description | Range |
+|--------|-------------|-------|
+| `vix` | CBOE Volatility Index value | 10-80+ |
+| `vix_signal` | Normalized VIX sentiment | -1.0 to 1.0 |
+| `vix_percentile` | VIX historical percentile | 0-100 |
+
+**Options Flow Signals (Stocks Only):**
+| Signal | Description | Range |
+|--------|-------------|-------|
+| `options_sentiment` | Derived from put/call ratio | -1.0 to 1.0 |
+| `put_call_ratio` | Raw put/call ratio | 0.3 to 2.0+ |
+| `market_options_sentiment` | SPY options sentiment (market-wide) | -1.0 to 1.0 |
+
 **Usage Example:**
 ```python
 # Check if fundamental data is available (stocks only)
@@ -175,6 +189,16 @@ insider = data.get('insider_sentiment')
 if insider is not None:
     if insider > 0.5: score += 1  # Heavy insider buying
     if insider < -0.5: score -= 1  # Heavy insider selling
+
+# Use VIX for volatility regime detection
+vix = data.get('vix', 0) or 0
+if vix > 30:
+    position_size *= 0.5  # Reduce size in high volatility
+
+# Use options sentiment for stocks
+options_sent = data.get('options_sentiment')
+if options_sent is not None and options_sent < -0.5:
+    score -= 1  # Heavy put buying = bearish
 ```
 
 ## API Endpoints

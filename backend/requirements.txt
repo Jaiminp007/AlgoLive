@@ -11,13 +11,11 @@ ccxt==4.5.25
 gunicorn==23.0.0
 gevent==24.11.1
 gevent-websocket==0.10.1
-azure-ai-inference
-pytrends
-# NOTE: Removed torch & transformers (2GB+) - too heavy for Railway free tier
-# Using textblob for lightweight sentiment analysis instead
+azure-ai-inference==1.0.0b6
+pytrends==4.9.2
 textblob==0.19.0
-
 yfinance==0.2.38
-
-# Sandbox Agent (E2B Code Interpreter)
 e2b-code-interpreter==1.0.3
+pytz==2024.1
+scipy==1.11.4
+certifi==2024.2.2

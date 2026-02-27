@@ -1,0 +1,21 @@
+# Build stage
+FROM node:18-alpine as build
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Serve stage
+FROM nginx:alpine
+
+# Remove default nginx static assets
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy static assets from builder stage
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Containers run nginx with global directives and daemon off
+EXPOSE 80
+ENTRYPOINT ["nginx", "-g", "daemon off;"]

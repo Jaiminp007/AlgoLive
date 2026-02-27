@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies needed for compiling some python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy backend requirements first to leverage Docker cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy backend source code
+COPY . .
+
+# Create the agents directory to mount the volume to
+# Ensure correct permissions
+RUN mkdir -p /app/market_simulation/agents && \
+    chmod 777 /app/market_simulation/agents
+
+# Using gevent/eventlet for SocketIO async performance
+# We use exactly 1 worker for SocketIO in memory without Redis pub/sub
+CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "--timeout", "300", "app:app"]

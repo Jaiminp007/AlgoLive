@@ -86,6 +86,24 @@ market_data[symbol] = {
     'earnings_surprise': 0.12,      # Latest earnings vs estimate (%)
     'news_sentiment_score': 0.6,    # Pre-calculated news sentiment (-1 to 1)
     'data_source': 'financial_datasets',  # 'financial_datasets' or 'fallback'
+
+    # --- VIX (Market Fear Gauge - All Assets) ---
+    'vix': 18.5,                    # CBOE Volatility Index
+                                    # < 15 = Low volatility (complacent)
+                                    # 15-20 = Normal
+                                    # 20-30 = Elevated (caution)
+                                    # > 30 = High volatility (fear)
+    'vix_signal': 0.15,             # Normalized VIX (-1 to +1)
+                                    # Positive = low vol, Negative = high vol
+    'vix_percentile': 45,           # Historical percentile (0-100)
+
+    # --- OPTIONS FLOW (Stocks Only) ---
+    'options_sentiment': 0.3,       # From put/call ratio (-1 to +1)
+                                    # > 0.3 = Bullish options flow
+                                    # < -0.3 = Bearish options flow
+    'put_call_ratio': 0.85,         # Raw P/C ratio
+                                    # < 0.7 = Bullish, > 1.0 = Bearish
+    'market_options_sentiment': 0.2, # SPY-based market-wide sentiment
 }
 
 ## AGENT STATE (PERSISTENT - USE THIS INSTEAD OF GLOBALS!)

@@ -10,6 +10,11 @@ const AgentSelection = ({ onStart }) => {
     const [failedAgents, setFailedAgents] = useState([]); // [{index, name, originalModel}]
     const [successfulAgents, setSuccessfulAgents] = useState([]); // names of deployed agents
     const logRef = useRef(null);
+    const [showPasteModal, setShowPasteModal] = useState(false);
+    const [customName, setCustomName] = useState('Agent_custom_');
+    const [customCode, setCustomCode] = useState('');
+    const [customError, setCustomError] = useState(null);
+    const [customDeploying, setCustomDeploying] = useState(false);
 
     useEffect(() => {
         console.log("AgentSelection: Fetching models...");
@@ -138,6 +143,30 @@ const AgentSelection = ({ onStart }) => {
         }
     };
 
+    const handleDeployCustom = async () => {
+        if (!customName.trim() || !customCode.trim()) return;
+        setCustomDeploying(true);
+        setCustomError(null);
+        try {
+            const res = await api.post('/deploy_custom_agent', { name: customName.trim(), code: customCode.trim() });
+            if (res.data.success) {
+                const deployedName = res.data.name;
+                setSuccessfulAgents(prev => [...prev, deployedName]);
+                setGenerationLogs(prev => [...prev, `Deployed ${deployedName} (custom code)`]);
+                setShowPasteModal(false);
+                setCustomCode('');
+                setCustomName('Agent_custom_');
+            } else {
+                setCustomError(res.data.error || 'Unknown error');
+            }
+        } catch (err) {
+            const msg = err.response?.data?.error || err.message;
+            setCustomError(msg);
+        } finally {
+            setCustomDeploying(false);
+        }
+    };
+
     const allModelsFlat = Object.values(models).flat();
 
     return (
@@ -209,7 +238,21 @@ const AgentSelection = ({ onStart }) => {
                                     fontSize: '0.8rem'
                                 }}
                             >
-                                🗑️ CLEAR ALL DATA
+                                CLEAR ALL DATA
+                            </button>
+                            <button
+                                onClick={() => { setShowPasteModal(true); setCustomError(null); }}
+                                style={{
+                                    padding: '6px 12px',
+                                    background: 'rgba(255, 160, 0, 0.15)',
+                                    border: '1px solid #ffa000',
+                                    color: '#ffa000',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '0.8rem'
+                                }}
+                            >
+                                PASTE CODE
                             </button>
                         </div>
                         <button className="cyber-button" onClick={handleStart} disabled={selectedModels.length === 0} style={{ opacity: selectedModels.length === 0 ? 0.5 : 1 }}>
@@ -257,6 +300,74 @@ const AgentSelection = ({ onStart }) => {
                             </button>
                         </div>
                     )}
+                </div>
+            )}
+            {showPasteModal && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}
+                    onClick={(e) => { if (e.target === e.currentTarget) setShowPasteModal(false); }}
+                >
+                    <div className="glass-panel" style={{ width: '500px', maxHeight: '90vh', padding: '24px', overflow: 'auto' }}>
+                        <h3 style={{ margin: '0 0 16px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>Deploy Custom Algorithm</h3>
+
+                        <label style={{ display: 'block', marginBottom: '4px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Agent Name</label>
+                        <input
+                            type="text"
+                            value={customName}
+                            onChange={(e) => setCustomName(e.target.value)}
+                            style={{
+                                width: '100%', padding: '8px', marginBottom: '12px',
+                                background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
+                                color: 'var(--text-primary)', borderRadius: '4px', boxSizing: 'border-box'
+                            }}
+                        />
+
+                        <label style={{ display: 'block', marginBottom: '4px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Strategy Code</label>
+                        <textarea
+                            value={customCode}
+                            onChange={(e) => setCustomCode(e.target.value)}
+                            placeholder={`def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None):\n    # Your strategy here\n    return ("HOLD", None, 0)`}
+                            style={{
+                                width: '100%', height: '400px', padding: '10px', marginBottom: '12px',
+                                background: 'rgba(0,0,0,0.5)', border: '1px solid var(--border)',
+                                color: '#e0e0e0', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.8rem',
+                                resize: 'vertical', boxSizing: 'border-box'
+                            }}
+                        />
+
+                        {customError && (
+                            <div style={{
+                                padding: '10px', marginBottom: '12px',
+                                background: 'rgba(213,0,0,0.2)', border: '1px solid #ff5555',
+                                color: '#ff5555', borderRadius: '4px', fontSize: '0.85rem', wordBreak: 'break-word'
+                            }}>
+                                {customError}
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button
+                                onClick={() => setShowPasteModal(false)}
+                                style={{
+                                    padding: '8px 16px', background: 'transparent',
+                                    border: '1px solid var(--border)', color: 'var(--text-secondary)',
+                                    borderRadius: '4px', cursor: 'pointer'
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeployCustom}
+                                disabled={customDeploying || !customCode.trim()}
+                                className="cyber-button"
+                                style={{ opacity: customDeploying || !customCode.trim() ? 0.5 : 1 }}
+                            >
+                                {customDeploying ? 'Deploying...' : 'Deploy'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

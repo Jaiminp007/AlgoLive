@@ -978,33 +978,86 @@ Generate now. NO API CALLS.`;
             }
         }
 
-        addLine('info', `Running backtest: period=${period}, initial=$${initial}`);
-        addLine('thinking', 'Backtesting...');
+        // Validate period
+        const validPeriods = ['1m', '3m', '6m', '1y'];
+        if (!validPeriods.includes(period)) {
+            addLine('error', `Invalid period. Must be one of: ${validPeriods.join(', ')}`);
+            return;
+        }
 
-        // Simulate backtest results (in real implementation, call backend)
-        await new Promise(r => setTimeout(r, 2000));
+        addLine('info', `Running backtest: period=${period}, initial=$${initial.toLocaleString()}`);
+        addLine('thinking', 'Fetching historical data and running backtest...');
 
-        setLines(prev => prev.filter(l => !(l.type === 'thinking' && l.content === 'Backtesting...')));
+        try {
+            // Call real backend endpoint
+            const res = await api.post('/sandbox/backtest', {
+                code: finalCode,
+                period: period,
+                initial: initial,
+                symbols: ['BTC', 'ETH', 'SOL', 'BNB']  // Crypto symbols
+            });
 
-        // Mock backtest results
-        const results = {
-            metrics: [
-                { label: 'Total Return', value: '+12.4%', color: '#10b981' },
-                { label: 'Sharpe Ratio', value: '1.82', color: '#22d3ee' },
-                { label: 'Max Drawdown', value: '-4.2%', color: '#ef4444' },
-                { label: 'Win Rate', value: '58%', color: '#f59e0b' },
-            ],
-            trades: [
-                { type: 'BUY', symbol: 'BTC', price: '94,230', pnl: 2.1 },
-                { type: 'SELL', symbol: 'BTC', price: '96,210', pnl: 1.8 },
-                { type: 'BUY', symbol: 'ETH', price: '3,420', pnl: -0.5 },
-                { type: 'SELL', symbol: 'SOL', price: '187', pnl: 3.2 },
-                { type: 'BUY', symbol: 'BTC', price: '95,100', pnl: 0.9 },
-            ]
-        };
+            // Remove thinking indicator
+            setLines(prev => prev.filter(l => !(l.type === 'thinking' && l.content.includes('backtest'))));
 
-        setLines(prev => [...prev, { type: 'backtest-results', content: results }]);
-        addLine('success', `Backtest complete: ${period} period, $${initial} initial capital`);
+            if (res.data.error) {
+                addLine('error', `Backtest failed: ${res.data.error}`);
+                return;
+            }
+
+            const { metrics, trades, equity_curve } = res.data;
+
+            // Format metrics for display
+            const formattedResults = {
+                metrics: [
+                    {
+                        label: 'Total Return',
+                        value: `${metrics.total_return >= 0 ? '+' : ''}${metrics.total_return}%`,
+                        color: metrics.total_return >= 0 ? '#10b981' : '#ef4444'
+                    },
+                    {
+                        label: 'Sharpe Ratio',
+                        value: metrics.sharpe_ratio.toFixed(2),
+                        color: metrics.sharpe_ratio >= 1 ? '#22d3ee' : '#f59e0b'
+                    },
+                    {
+                        label: 'Max Drawdown',
+                        value: `-${metrics.max_drawdown}%`,
+                        color: metrics.max_drawdown > 10 ? '#ef4444' : '#f59e0b'
+                    },
+                    {
+                        label: 'Win Rate',
+                        value: `${metrics.win_rate}%`,
+                        color: metrics.win_rate >= 50 ? '#10b981' : '#f59e0b'
+                    },
+                    {
+                        label: 'Total Trades',
+                        value: metrics.total_trades.toString(),
+                        color: '#8b5cf6'
+                    },
+                    {
+                        label: 'Profit Factor',
+                        value: metrics.profit_factor >= 999 ? 'Inf' : metrics.profit_factor.toFixed(2),
+                        color: metrics.profit_factor >= 1.5 ? '#10b981' : '#f59e0b'
+                    },
+                ],
+                trades: trades.slice(-10).map(t => ({
+                    type: t.action,
+                    symbol: t.symbol,
+                    price: t.price.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+                    pnl: t.pnl_pct !== undefined ? t.pnl_pct : null
+                })),
+                equity_curve: equity_curve
+            };
+
+            setLines(prev => [...prev, { type: 'backtest-results', content: formattedResults }]);
+            addLine('success', `Backtest complete: ${period} period, $${initial.toLocaleString()} initial, ${metrics.total_trades} trades`);
+
+        } catch (err) {
+            // Remove thinking indicator
+            setLines(prev => prev.filter(l => !(l.type === 'thinking' && l.content.includes('backtest'))));
+            addLine('error', `Backtest error: ${err.response?.data?.error || err.message}`);
+        }
     };
 
     // Handle deploy

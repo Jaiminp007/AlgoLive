@@ -160,6 +160,84 @@ GET /financials/segmented?ticker=AAPL&period=annual&limit=5
 
 ---
 
+## Web Search API
+
+You have access to a `web_search()` function to search the web for market insights, news, and analyst opinions. This is useful for:
+- Validating trading hypotheses with real-world news
+- Finding analyst opinions and price targets
+- Discovering market events and catalysts
+- Researching company announcements
+
+### Usage
+
+```python
+# Search for recent news
+results = web_search("NVDA earnings forecast 2026")
+
+# Process results
+for r in results:
+    print(f"Title: {r['title']}")
+    print(f"URL: {r['url']}")
+    print(f"Content: {r['content'][:200]}...")
+    print(f"Score: {r['score']}")
+    print("---")
+```
+
+### Response Format
+
+```python
+[
+    {
+        "title": "NVIDIA Q4 Earnings Preview: AI Boom...",
+        "url": "https://example.com/article",
+        "content": "Analysts expect NVIDIA to report...",
+        "score": 0.95  # Relevance score (0-1)
+    },
+    ...
+]
+```
+
+### Best Practices
+
+1. **Be specific** - Include ticker symbol, dates, and context
+   - Good: "AAPL iPhone 16 sales forecast January 2026"
+   - Bad: "apple news"
+
+2. **Use for validation** - Cross-reference your findings
+   - Example: If insider buying is high, search for why
+
+3. **Find catalysts** - Discover upcoming events
+   - Example: "TSLA earnings date Q1 2026"
+
+4. **Check analyst opinions** - Get price targets
+   - Example: "META analyst price target 2026"
+
+### Example: Combining Search with Data Analysis
+
+```python
+# Step 1: Check insider activity
+import requests
+headers = {"X-API-KEY": os.environ.get('FINANCIAL_DATASETS_API_KEY')}
+response = requests.get(
+    "https://api.financialdatasets.ai/insider-trades",
+    params={"ticker": "NVDA", "limit": 20},
+    headers=headers
+)
+trades = response.json().get("insider_trades", [])
+
+# Step 2: If unusual activity, search for why
+buy_count = sum(1 for t in trades if "buy" in str(t.get('transaction_type', '')).lower())
+if buy_count > 5:
+    print(f"High insider buying detected ({buy_count} buys)")
+
+    # Search for potential reasons
+    results = web_search("NVDA insider buying news 2026")
+    for r in results[:3]:
+        print(f"- {r['title']}")
+```
+
+---
+
 ## CRITICAL RULES FOR CODE GENERATION
 
 ### Rule 1: ONLY Output Executable Python Code
@@ -469,6 +547,16 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
             'pe_ratio': float,
             'earnings_surprise': float,      # % vs estimate
             'news_sentiment_score': float,   # -1 to 1
+
+            # VIX - Market volatility (all assets):
+            'vix': float,                    # CBOE Volatility Index (10-80+)
+            'vix_signal': float,             # Normalized (-1 to 1, negative=fear)
+            'vix_percentile': int,           # Historical percentile (0-100)
+
+            # Options flow (stocks only):
+            'options_sentiment': float,      # -1 to 1 from put/call ratio
+            'put_call_ratio': float,         # Raw P/C ratio (0.3-2.0+)
+            'market_options_sentiment': float, # SPY market-wide sentiment
         }]
 
         tick: int - Current tick number (increments every second)
@@ -498,9 +586,84 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
     Returns:
         Tuple[str, str, float]: (ACTION, SYMBOL, QUANTITY)
         - ACTION: "BUY" | "SELL" | "HOLD"
-        - SYMBOL: "BTC", "ETH", "SOL", "AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN", "META"
+        - SYMBOL: "BTC", "ETH", "SOL", "BNB" (crypto) or "AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN", "META" (stocks)
         - QUANTITY: float (fractional quantities allowed)
+        
+    ⚠️ CRITICAL - RETURN FORMAT:
+        ✅ CORRECT:   return ("BUY", "BTC", 0.1)
+        ✅ CORRECT:   return ("HOLD", None, 0)
+        ❌ WRONG:     return ("BUY", "BTC", 0.1), agent_state  # NO! Don't return agent_state
+        ❌ WRONG:     return "BUY", "BTC", 0.1  # Use parentheses!
+        
+        The function MUST return EXACTLY 3 values in a tuple. Nothing more, nothing less.
+        agent_state is automatically saved - DO NOT return it manually.
     """
+```
+
+---
+
+## CRITICAL RULES - Read This First
+
+### Rule #1: Return Format (MOST COMMON ERROR)
+
+**Your function MUST return a 3-tuple. Nothing else.**
+
+```python
+# ✅ CORRECT Examples:
+return ("BUY", "BTC", 0.5)
+return ("SELL", "ETH", 1.2)
+return ("HOLD", None, 0)
+
+# ❌ WRONG Examples (will cause validation errors):
+return ("BUY", "BTC", 0.5), agent_state  # NO! Don't return agent_state
+return "BUY", "BTC", 0.5  # Use parentheses for tuple!
+return {"action": "BUY", "symbol": "BTC"}  # Not a dict!
+result = ("BUY", "BTC", 0.5)
+return result, agent_state  # NO! Just return result
+```
+
+### Rule #2: State Management
+
+**agent_state is automatically managed. DO NOT return it.**
+
+```python
+# ✅ CORRECT - Modify agent_state directly:
+def execute_strategy(..., agent_state=None):
+    if agent_state is None:
+        agent_state = {'custom': {}}
+    
+    custom = agent_state.get('custom', {})
+    
+    # Store your data
+    custom['last_price'] = 50000
+    custom['trade_count'] = custom.get('trade_count', 0) + 1
+    
+    # Just return the trade decision
+    return ("BUY", "BTC", 0.1)  # agent_state is auto-saved!
+
+# ❌ WRONG - Don't return agent_state:
+def execute_strategy(..., agent_state=None):
+    custom = agent_state.get('custom', {})
+    custom['count'] = 1
+    return ("BUY", "BTC", 0.1), agent_state  # NO!
+```
+
+### Rule #3: Handle None Values
+
+**ALWAYS use `.get(key, 0) or 0` for numeric fields:**
+
+```python
+# ✅ CORRECT - Safe from None errors:
+price = data.get('price', 0) or 0
+obi = data.get('obi_weighted', 0) or 0
+sentiment = data.get('sentiment', 0) or 0
+
+if obi > 0.3:  # Safe - never None
+    score += 1
+
+# ❌ WRONG - Will crash on None:
+obi = data.get('obi_weighted')  # Can be None!
+if obi > 0.3:  # ERROR: '>' not supported between 'NoneType' and 'float'
 ```
 
 ---
@@ -659,7 +822,207 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
 
 ---
 
+## High-Frequency Trading (HFT) Crypto Strategies
+
+### What Makes a Good HFT Crypto Algorithm
+
+1. **Speed**: Decisions made every tick (1 second)
+2. **Small Profits**: Target 0.1-0.5% per trade, compound over many trades
+3. **High Win Rate**: Aim for 60%+ win rate with tight stops
+4. **Low Latency Signals**: Use data already provided (no API calls)
+5. **Risk Management**: Strict stop-losses and position sizing
+
+### Best Signals for Crypto HFT
+
+| Signal | Description | How to Use | Example |
+|--------|-------------|------------|---------|
+| **OBI (Order Book Imbalance)** | -1 to 1, shows buy/sell pressure | Buy when > 0.3, Sell when < -0.3 | `obi = data.get('obi_weighted', 0) or 0` |
+| **Microprice** | Fair value estimate | Buy when price < microprice | `micro = data.get('micro_price', 0) or 0` |
+| **OFI (Order Flow Imbalance)** | Net order flow direction | Momentum indicator | `ofi = data.get('ofi', 0) or 0` |
+| **Taker Ratio** | Buy/sell aggression | > 0.6 = bullish | `taker = data.get('taker_ratio', 0) or 0` |
+| **CVD Divergence** | Volume vs price divergence | Mean reversion signal | `cvd = data.get('cvd_divergence', 0) or 0` |
+| **Funding Velocity** | Funding rate change speed | Sentiment shift | `funding_v = data.get('funding_rate_velocity', 0) or 0` |
+| **VIX** | Market fear/volatility | > 30 = reduce size | `vix = data.get('vix', 0) or 0` |
+
+### Example HFT Crypto Strategy Pattern
+
+```python
+import numpy as np
+
+def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=None, agent_state=None):
+    """
+    High-frequency crypto strategy using order book signals.
+    Trades BTC, ETH, SOL based on microstructure.
+    """
+    # Initialize state
+    if agent_state is None:
+        agent_state = {'custom': {}}
+    
+    custom = agent_state.get('custom', {})
+    
+    # Config
+    CRYPTOS = ['BTC', 'ETH', 'SOL', 'BNB']
+    POSITION_SIZE = 0.15  # 15% per position
+    TAKE_PROFIT = 0.003   # 0.3%
+    STOP_LOSS = -0.001    # -0.1%
+    
+    # Check exits first (faster execution)
+    for sym in CRYPTOS:
+        qty = portfolio.get(sym, 0)
+        if qty == 0:
+            continue
+        
+        # Get PnL
+        pnl_info = agent_state.get('current_pnl', {}).get(sym, {})
+        pnl_pct = pnl_info.get('pnl_percent', 0) / 100.0
+        
+        # Exit on profit or loss
+        if pnl_pct >= TAKE_PROFIT or pnl_pct <= STOP_LOSS:
+            return ("SELL", sym, abs(qty))
+    
+    # Entry logic - find best opportunity
+    best_score = 0
+    best_sym = None
+    
+    for sym in CRYPTOS:
+        # Skip if already have position
+        if portfolio.get(sym, 0) != 0:
+            continue
+        
+        data = market_data.get(sym, {})
+        if not data:
+            continue
+        
+        price = data.get('price', 0) or 0
+        if price == 0:
+            continue
+        
+        # Score based on microstructure signals
+        score = 0
+        
+        # Signal 1: Order Book Imbalance (most important for HFT)
+        obi = data.get('obi_weighted', 0) or 0
+        if obi > 0.3:
+            score += 3
+        elif obi > 0.15:
+            score += 1
+        
+        # Signal 2: Microprice deviation
+        micro = data.get('micro_price', 0) or 0
+        if micro and price:
+            deviation = (micro - price) / price
+            if deviation > 0.001:  # Microprice above = bullish
+                score += 2
+        
+        # Signal 3: Order Flow Imbalance
+        ofi = data.get('ofi', 0) or 0
+        if ofi > 0.2:
+            score += 1
+        
+        # Signal 4: Taker Ratio (aggressive buying)
+        taker = data.get('taker_ratio', 0) or 0
+        if taker > 0.6:
+            score += 1
+        
+        # Track best opportunity
+        if score > best_score:
+            best_score = score
+            best_sym = sym
+    
+    # Execute if strong signal
+    if best_sym and best_score >= 4:  # Threshold: need 4+ points
+        price = market_data[best_sym]['price']
+        quantity = (cash_balance * POSITION_SIZE) / price
+        return ("BUY", best_sym, quantity)
+    
+    return ("HOLD", None, 0)
+```
+
+### Key HFT Patterns
+
+**1. Mean Reversion (Quick Bounces)**
+```python
+# When price deviates from microprice, expect reversion
+micro = data.get('micro_price', 0) or 0
+price = data.get('price', 0) or 0
+if micro and price:
+    deviation = (price - micro) / micro
+    if deviation < -0.002:  # Price 0.2% below fair value
+        return ("BUY", "BTC", quantity)
+```
+
+**2. Momentum Burst (OBI + Volume)**
+```python
+# Strong buy pressure + high volume = continuation
+obi = data.get('obi_weighted', 0) or 0
+volume = data.get('volume', 0) or 0
+if obi > 0.4 and volume > avg_volume * 1.5:
+    return ("BUY", "BTC", quantity)
+```
+
+**3. Order Flow Confirmation**
+```python
+# Multiple signals align = high confidence
+obi = data.get('obi_weighted', 0) or 0
+ofi = data.get('ofi', 0) or 0
+taker = data.get('taker_ratio', 0) or 0
+
+if obi > 0.3 and ofi > 0.2 and taker > 0.6:
+    # All signals bullish = strong buy
+    return ("BUY", "BTC", quantity)
+```
+
+**4. Funding Rate Momentum (Crypto Only)**
+```python
+# Funding rate velocity shows sentiment shift
+funding_v = data.get('funding_rate_velocity', 0) or 0
+if funding_v > 0.0001:  # Rapidly increasing
+    return ("BUY", "BTC", quantity)
+```
+
+### Common HFT Mistakes to Avoid
+
+❌ **Using moving averages** - Too slow for HFT (use microstructure signals)
+❌ **Large position sizes** - Keep positions small, compound gains
+❌ **Wide stop-losses** - HFT needs tight stops (0.1-0.3%)
+❌ **Holding too long** - Exit quickly on profit or loss
+❌ **Ignoring transaction costs** - Must beat 0.1% round-trip costs
+❌ **Not checking None values** - Always use `.get(key, 0) or 0`
+
+---
+
 ## Your Research Process
+
+### For Crypto HFT Strategies
+
+When user requests a crypto HFT algorithm, focus on:
+
+1. **Microstructure Analysis** - NOT fundamental data
+   - Don't waste time on news, insider trades, or financial statements for crypto
+   - Focus on: OBI, microprice, order flow, taker ratio, funding rates
+   
+2. **Signal Discovery** 
+   - Test which microstructure signals predict short-term moves (next 1-60 seconds)
+   - Look for: Order book imbalances, aggressive buying/selling, price-microprice deviations
+   
+3. **Speed Optimization**
+   - Use data already in `market_data` - NO API calls in the strategy
+   - Simple calculations only - no complex math
+   
+4. **Risk Parameters**
+   - Tight stops: 0.1-0.3% loss tolerance
+   - Small positions: 10-20% of capital per trade
+   - Quick exits: Take profit at 0.3-0.5%
+
+5. **Build the Algorithm**
+   - Must focus on BTC, ETH, SOL, BNB only
+   - Use order book signals (OBI, microprice, OFI, taker ratio)
+   - No moving averages or slow indicators
+   - Return format: `return ("ACTION", "SYMBOL", quantity)` - nothing else!
+
+### For Stock Fundamental Strategies
+
+When user requests stock analysis:
 
 1. **Start by exploring the data** - Fetch insider trades, news, prices for all tickers
 2. **Look for patterns** - What signals correlate with price movements?
