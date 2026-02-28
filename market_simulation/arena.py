@@ -538,7 +538,13 @@ class Arena:
                 continue
             
             # Use Benchmark timestamp as reference (BTC or First available)
-            benchmark_sym = 'BTC' if 'BTC' in tickers else list(tickers.keys())[0]
+            if 'BTC' in tickers:
+                benchmark_sym = 'BTC'
+            else:
+                benchmark_sym = next((k for k in tickers.keys() if not k.startswith('_')), None)
+                if not benchmark_sym:
+                    time.sleep(1)
+                    continue
             
             # The value could be an error string if API failed
             benchmark_data = tickers.get(benchmark_sym)
