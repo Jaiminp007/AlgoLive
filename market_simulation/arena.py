@@ -556,11 +556,15 @@ class Arena:
             # Update histories with extended data
             # Calc Tick Rule Volume Flow
             for sym, data in tickers.items():
+                if not isinstance(data, dict):
+                    # print(f"Arena: Ticker data for {sym} is not a dict: {data}")
+                    continue
+
                 if sym in self.market_history:
                     # Tick Rule: Price > Prev ? Buy : Sell
-                    prev_price = self.market_history[sym][-1]['price'] if self.market_history[sym] else data['price']
-                    current_price = data['price']
-                    vol = data['volume']
+                    prev_price = self.market_history[sym][-1]['price'] if self.market_history[sym] else data.get('price', 0)
+                    current_price = data.get('price', 0)
+                    vol = data.get('volume', 0)
                     
                     buy_vol = 0.0
                     sell_vol = 0.0
