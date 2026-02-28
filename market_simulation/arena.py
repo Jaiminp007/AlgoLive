@@ -830,7 +830,6 @@ class Arena:
 
                 print(f"Arena: Signal caches updated - VIX: {self.vix_cache.get('value') if self.vix_cache else 'N/A'}")
 
-            # Broadcast
             # Determine Benchmark Price (BTC for Crypto, SPY or First for Stocks)
             benchmark_sym = 'BTC' if 'BTC' in self.symbols else ('SPY' if 'SPY' in self.symbols else self.symbols[0])
             benchmark_price = tickers.get(benchmark_sym, {}).get('price', 0)
@@ -848,6 +847,12 @@ class Arena:
             if ts > 0 and benchmark_price > 0:
                 self.chart_history.append(chart_payload)
                 self._db_queue.put(('chart', chart_payload.copy()))
+            
+          except Exception as e:
+              print(f"Arena Error Loop: {e}")
+              import traceback
+              traceback.print_exc()
+              time.sleep(1)
             
             updates = []
             
