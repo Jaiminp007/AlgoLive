@@ -917,6 +917,7 @@ class Arena:
                             # Backward compatibility: agent doesn't accept market_state
                             res = agent.execute_strategy(market_data, tick_counter, data['cash'], data['portfolio'])
                     
+                    agent_provided_state = False
                     if isinstance(res, tuple) and len(res) == 3:
                         decision, symbol, quantity = res
                     elif isinstance(res, tuple) and len(res) == 2:
@@ -926,14 +927,16 @@ class Arena:
                             decision, symbol, quantity = decision_part
                         else:
                             decision = "HOLD"
-                        # Persist the returned agent state
+                        # Persist the returned agent state (agent already manages its own state)
                         if isinstance(returned_state, dict):
                             data['custom_state'] = returned_state
+                            agent_provided_state = True
                     else:
                         decision = "HOLD"
                     
                     # Persist agent_state back so custom keys survive to next tick
-                    if isinstance(agent_state, dict):
+                    # Only do this if the agent didn't return its own state (avoid overwriting)
+                    if not agent_provided_state and isinstance(agent_state, dict):
                         saved = {k: v for k, v in agent_state.items()
                                  if k not in ('entry_prices', 'trade_history', 'current_pnl')}
                         data['custom_state'] = saved
