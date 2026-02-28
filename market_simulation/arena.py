@@ -538,7 +538,15 @@ class Arena:
             
             # Use Benchmark timestamp as reference (BTC or First available)
             benchmark_sym = 'BTC' if 'BTC' in tickers else list(tickers.keys())[0]
-            ts = tickers.get(benchmark_sym, {}).get('timestamp', 0)
+            
+            # The value could be an error string if API failed
+            benchmark_data = tickers.get(benchmark_sym)
+            if not isinstance(benchmark_data, dict):
+                # print(f"Arena: Ticker data for {benchmark_sym} is not a dict: {benchmark_data}")
+                time.sleep(1)
+                continue
+                
+            ts = benchmark_data.get('timestamp', 0)
             
             if ts == last_ts:
                 time.sleep(0.1)
