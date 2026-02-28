@@ -22,4 +22,4 @@ RUN mkdir -p /app/market_simulation/agents && \
 
 # Using gevent/eventlet for SocketIO async performance
 # We use exactly 1 worker for SocketIO in memory without Redis pub/sub
-CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "--timeout", "300", "backend.app:app"]
+CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "--bind", "0.0.0.0:5000", "--timeout", "600", "backend.app:app"]
