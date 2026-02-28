@@ -861,12 +861,19 @@ class Arena:
                 
                 try:
                     # === FIX #1: Build agent_state with entry prices and current PnL ===
+                    # Load persistent custom state so agents keep their own variables across ticks
+                    persistent_custom = data.get('custom_state', {})
                     agent_state = {
                         'entry_prices': data.get('entry_prices', {}),
                         'trade_history': data.get('trade_history', [])[-20:],  # Last 20 trades
-                        'custom': data.get('custom_state', {}),
+                        'custom': persistent_custom,
                         'current_pnl': {}  # Calculate PnL for each open position
                     }
+                    # Also merge any top-level keys from custom_state directly into agent_state
+                    # so agents that store state at the top level (e.g. price_ratio_mean) work
+                    for _k, _v in persistent_custom.items():
+                        if _k not in agent_state:
+                            agent_state[_k] = _v
 
                     # Calculate unrealized PnL for each open position
                     for asset, pos_qty in data['portfolio'].items():
@@ -912,8 +919,24 @@ class Arena:
                     
                     if isinstance(res, tuple) and len(res) == 3:
                         decision, symbol, quantity = res
+                    elif isinstance(res, tuple) and len(res) == 2:
+                        # Some agents return (decision_tuple, agent_state)
+                        decision_part, returned_state = res
+                        if isinstance(decision_part, tuple) and len(decision_part) == 3:
+                            decision, symbol, quantity = decision_part
+                        else:
+                            decision = "HOLD"
+                        # Persist the returned agent state
+                        if isinstance(returned_state, dict):
+                            data['custom_state'] = returned_state
                     else:
                         decision = "HOLD"
+                    
+                    # Persist agent_state back so custom keys survive to next tick
+                    if isinstance(agent_state, dict):
+                        saved = {k: v for k, v in agent_state.items()
+                                 if k not in ('entry_prices', 'trade_history', 'current_pnl')}
+                        data['custom_state'] = saved
                     
                     # VALIDATION (Protect against "Degen" agents)
                     if decision in ["BUY", "SELL"]:
