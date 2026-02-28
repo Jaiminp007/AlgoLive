@@ -854,7 +854,7 @@ class Arena:
               traceback.print_exc()
               time.sleep(1)
             
-          updates = []
+            updates = []
             
             # Agent Decisions
             agent_names = list(self.agents.keys())
