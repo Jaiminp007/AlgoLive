@@ -92,17 +92,18 @@ class DataFeed:
         self.current_sim_prices = {}
         self.last_update_times = {}
 
-        # --- INIT BINANCE (CRYPTO - FALLBACK) ---
-        print(f"DataFeed: Initializing Crypto via BinanceUS (fallback): {self.crypto_symbols}")
+        # --- INIT KRAKEN (CRYPTO - FALLBACK) ---
+        print(f"DataFeed: Initializing Crypto via Kraken (fallback): {self.crypto_symbols}")
         try:
-            self.exchange = ccxt.binanceus({
+            self.exchange = ccxt.kraken({
                 'enableRateLimit': True,
+                'timeout': 10000,
             })
             # Test connection
             self.exchange.load_markets()
-            print("DataFeed: BinanceUS initialized successfully")
+            print("DataFeed: Kraken initialized successfully")
         except Exception as e:
-            print(f"DataFeed: BinanceUS unavailable ({e}), will use CoinGecko fallback")
+            print(f"DataFeed: Kraken unavailable ({e}), will use CoinGecko fallback")
             self.exchange = None
 
     def is_stock_market_open(self) -> bool:
