@@ -524,6 +524,7 @@ class Arena:
         tick_counter = 0
         last_ts = 0
         last_analyst_log = 0
+        debug_counter = 0
         
         while self.running:
           try:
@@ -533,7 +534,7 @@ class Arena:
                     print(f"Arena: Data feed returned string (Error/Closed): {tickers}")
                     time.sleep(5)
                 else:
-                    time.sleep(0.1)
+                    time.sleep(1)
                 continue
             
             # Use Benchmark timestamp as reference (BTC or First available)
@@ -542,16 +543,21 @@ class Arena:
             # The value could be an error string if API failed
             benchmark_data = tickers.get(benchmark_sym)
             if not isinstance(benchmark_data, dict):
-                # print(f"Arena: Ticker data for {benchmark_sym} is not a dict: {benchmark_data}")
+                print(f"Arena: Ticker data for {benchmark_sym} is not a dict, retrying: {str(benchmark_data)[:50]}")
                 time.sleep(1)
                 continue
                 
             ts = benchmark_data.get('timestamp', 0)
             
             if ts == last_ts:
+                debug_counter += 1
+                if debug_counter % 50 == 0:
+                    print(f"Arena: WARNING - Stalled on timestamp {ts}. Waiting for new tick from producer.")
                 time.sleep(0.1)
                 continue
+            
             last_ts = ts
+            debug_counter = 0
             
             # Update histories with extended data
             # Calc Tick Rule Volume Flow
