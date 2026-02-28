@@ -15,9 +15,13 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
     if bnb_price > 0 and btc_price > 0:  # Ensure valid price data
         price_ratio = bnb_price / btc_price
         
-        # Initialize agent_state for our price ratio tracking
+        # Initialize agent_state for our price ratio tracking (safe defaults from persistent state)
         if agent_state is None:
-            agent_state = {'price_ratio_mean': price_ratio, 'price_ratio_std': 0.0, 'step': 0}
+            agent_state = {}
+        if 'price_ratio_mean' not in agent_state:
+            agent_state['price_ratio_mean'] = price_ratio
+        if 'price_ratio_std' not in agent_state:
+            agent_state['price_ratio_std'] = 0.0
 
         # Update price ratio statistics using exponential moving average (EMA)
         decay = 0.01  # Controls EMA smoothing
