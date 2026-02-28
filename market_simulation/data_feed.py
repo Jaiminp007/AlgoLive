@@ -286,11 +286,10 @@ class DataFeed:
                 "market_status": snapshot["SPY"].get('market_status', 'closed')
             }
 
-        # --- FETCH CRYPTO (BINANCE/COINGECKO - always use for real-time) ---
+        # --- FETCH CRYPTO (KRAKEN/COINGECKO - always use for real-time) ---
         # Note: Crypto APIs are free, always fetch live data
         try:
             if self.exchange:
-                # Try Binance first
                 tickers = self.exchange.fetch_tickers(self.crypto_symbols)
 
                 for pair, data in tickers.items():
@@ -298,31 +297,25 @@ class DataFeed:
                     if not short_name:
                         continue
 
-                    # Fetch order book for OBI calculation (top 5 levels)
-                    order_book_bids = []
-                    order_book_asks = []
-                    try:
-                        ob = self.exchange.fetch_order_book(pair, limit=5)
-                        order_book_bids = ob.get('bids', [])[:5]  # [[price, volume], ...]
-                        order_book_asks = ob.get('asks', [])[:5]
-                    except Exception as ob_err:
-                        # Fallback: Use bid/ask from ticker as single level
-                        if data.get('bid') and data.get('ask'):
-                            order_book_bids = [[float(data['bid']), 1.0]]
-                            order_book_asks = [[float(data['ask']), 1.0]]
+                    # Build lightweight order book from ticker bid/ask (avoids per-symbol blocking call)
+                    bid = float(data.get('bid') or data.get('last') or 0)
+                    ask = float(data.get('ask') or data.get('last') or 0)
+                    order_book_bids = [[bid, 1.0]] if bid > 0 else []
+                    order_book_asks = [[ask, 1.0]] if ask > 0 else []
+                    last_price = float(data.get('last') or 0)
 
                     snapshot[short_name] = {
-                        "price": float(data['last']),
-                        "volume": float(data['baseVolume']),
-                        "high": float(data['high'] or data['last']),
-                        "low": float(data['low'] or data['last']),
-                        "open": float(data['open'] or data['last']),
-                        "bid": float(data['bid'] or 0),
-                        "ask": float(data['ask'] or 0),
+                        "price": last_price,
+                        "volume": float(data.get('baseVolume') or 0),
+                        "high": float(data.get('high') or last_price),
+                        "low": float(data.get('low') or last_price),
+                        "open": float(data.get('open') or last_price),
+                        "bid": bid,
+                        "ask": ask,
                         "timestamp": timestamp,
                         "bids": order_book_bids,
                         "asks": order_book_asks,
-                        "data_source": "binance",
+                        "data_source": "kraken",
                         "market_status": "open"  # Crypto is always open
                     }
             else:
