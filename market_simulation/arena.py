@@ -528,8 +528,12 @@ class Arena:
         while self.running:
           try:
             tickers = getattr(self, 'latest_tick', None)
-            if not tickers:
-                time.sleep(0.1)
+            if not tickers or not isinstance(tickers, dict):
+                if isinstance(tickers, str):
+                    print(f"Arena: Data feed returned string (Error/Closed): {tickers}")
+                    time.sleep(5)
+                else:
+                    time.sleep(0.1)
                 continue
             
             # Use Benchmark timestamp as reference (BTC or First available)
