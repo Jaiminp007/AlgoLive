@@ -749,7 +749,10 @@ class DataFeed:
             data = vix_ticker.history(period='5d', interval='1d')
 
             if data.empty:
-                return self._get_vix_fallback()
+                fallback = self._get_vix_fallback()
+                self._vix_cache = fallback
+                self._vix_cache_time = current_time
+                return fallback
 
             # Get current and previous values
             current_vix = float(data['Close'].iloc[-1])
