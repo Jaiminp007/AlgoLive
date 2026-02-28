@@ -93,16 +93,16 @@ class DataFeed:
         self.last_update_times = {}
 
         # --- INIT BINANCE (CRYPTO - FALLBACK) ---
-        print(f"DataFeed: Initializing Crypto via Binance (fallback): {self.crypto_symbols}")
+        print(f"DataFeed: Initializing Crypto via BinanceUS (fallback): {self.crypto_symbols}")
         try:
-            self.exchange = ccxt.binance({
+            self.exchange = ccxt.binanceus({
                 'enableRateLimit': True,
             })
             # Test connection
             self.exchange.load_markets()
-            print("DataFeed: Binance initialized successfully")
+            print("DataFeed: BinanceUS initialized successfully")
         except Exception as e:
-            print(f"DataFeed: Binance unavailable ({e}), will use CoinGecko fallback")
+            print(f"DataFeed: BinanceUS unavailable ({e}), will use CoinGecko fallback")
             self.exchange = None
 
     def is_stock_market_open(self) -> bool:
@@ -377,6 +377,9 @@ class DataFeed:
                     high = price * (1 + abs(change) / 200) if change > 0 else price
                     low = price * (1 - abs(change) / 200) if change < 0 else price
                     open_price = price * (1 - change / 100)
+                else:
+                    print(f"CoinGecko HTTP {response.status_code} for {short_name}")
+                    continue
                     
                     snapshot[short_name] = {
                         "price": float(price),
