@@ -848,12 +848,6 @@ class Arena:
                 self.chart_history.append(chart_payload)
                 self._db_queue.put(('chart', chart_payload.copy()))
             
-          except Exception as e:
-              print(f"Arena Error Loop: {e}")
-              import traceback
-              traceback.print_exc()
-              time.sleep(1)
-            
             updates = []
             
             # Agent Decisions
