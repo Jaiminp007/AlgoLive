@@ -81,9 +81,17 @@ def execute_strategy(market_data, tick, cash_balance, portfolio, market_state=No
     if not isinstance(custom, dict):
         custom = {}
 
-    # Initialize daily tracking if strictly needed
-    # (Since arena runs continuous, we track peak equity natively via agent_state if exposed)
+    # Track how long the algo has been live
+    if 'algo_start_tick' not in custom:
+        custom['algo_start_tick'] = tick
+        print(f"[BTC_Liq] Agent INITIALIZED at tick {tick}")
+        
+    algo_live_ticks = tick - custom['algo_start_tick']
     
+    # Log uptime every 60 ticks (approx 1 hour if 1 tick = 1 min, or 1 min if 1 tick = 1 sec)
+    if algo_live_ticks > 0 and algo_live_ticks % 60 == 0:
+        print(f"[BTC_Liq] UPTIME: Algorithm has been live for {algo_live_ticks} ticks.")
+
     # Check open positions / manage them
     for sym in SYMBOLS:
         qty = portfolio.get(sym, 0)
